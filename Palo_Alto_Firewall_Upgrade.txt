@@ -1,0 +1,252 @@
+Identity added: /runner/artifacts/2750/ssh_key_data (phardik@rocketsoftware.com)
+ansible-playbook [core 2.15.11]
+  config file = /runner/project/ansible.cfg
+  configured module search path = ['/runner/project/library/modules', '/runner/project/library']
+  ansible python module location = /usr/local/lib/python3.11/site-packages/ansible
+  ansible collection location = /runner/requirements_collections:/root/.ansible/collections:/usr/share/ansible/collections
+  executable location = /usr/local/bin/ansible-playbook
+  python version = 3.11.13 (main, Aug 21 2025, 11:45:17) [GCC 8.5.0 20210514 (Red Hat 8.5.0-28)] (/usr/bin/python3)
+  jinja version = 3.1.3
+  libyaml = True
+Using /runner/project/ansible.cfg as config file
+SSH password: 
+host_list declined parsing /runner/inventory/hosts as it did not pass its verify_file() method
+Parsed /runner/inventory/hosts inventory source with script plugin
+[WARNING]: Collection paloaltonetworks.panos does not support Ansible version
+2.15.11
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+Skipping callback 'awx_display', as we already have a stdout callback.
+Skipping callback 'default', as we already have a stdout callback.
+Skipping callback 'minimal', as we already have a stdout callback.
+Skipping callback 'oneline', as we already have a stdout callback.
+
+PLAYBOOK: site.yml *************************************************************
+1 plays in site.yml
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+PLAY [Palo Alto Firewall Upgrade] **********************************************
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Gathering Facts] *********************************************************
+task path: /runner/project/site.yml:18
+<127.0.0.1> ESTABLISH LOCAL CONNECTION FOR USER: root
+<127.0.0.1> EXEC /bin/sh -c 'echo ~root && sleep 0'
+<127.0.0.1> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /root/.ansible/tmp `"&& mkdir "` echo /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304 `" && echo ansible-tmp-1766072724.3783338-18-271161786168304="` echo /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304 `" ) && sleep 0'
+Using module file /usr/local/lib/python3.11/site-packages/ansible/modules/setup.py
+<127.0.0.1> PUT /root/.ansible/tmp/ansible-local-10gawrnlco/tmpck5hovgm TO /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304/AnsiballZ_setup.py
+<127.0.0.1> EXEC /bin/sh -c 'chmod u+x /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304/ /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304/AnsiballZ_setup.py && sleep 0'
+<127.0.0.1> EXEC /bin/sh -c '/usr/bin/python3 /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304/AnsiballZ_setup.py && sleep 0'
+<127.0.0.1> EXEC /bin/sh -c 'rm -f -r /root/.ansible/tmp/ansible-tmp-1766072724.3783338-18-271161786168304/ > /devull 2>&1 && sleep 0'
+ok: [localhost]
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Validate required variables] *********************************************
+task path: /runner/project/site.yml:29
+ok: [localhost] => {
+    "changed": false,
+    "msg": "Required variables validated"
+}
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Display operation info] **************************************************
+task path: /runner/project/site.yml:38
+ok: [localhost] => {
+    "msg": [
+        "============================================",
+        "Palo Alto Upgrade Playbook",
+        "============================================",
+        "Operation: pre_checks_only",
+        "Panorama: 10.17.37.55 (discovery only)",
+        "Target Firewall: densecsaasfw02 (SSH)",
+        "Target Version: 11.1.6-h10",
+        "Upgrade Mode: standalone",
+        "============================================"
+    ]
+}
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Get managed devices from Panorama] ***************************************
+task path: /runner/project/site.yml:56
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+<localhost> ESTABLISH LOCAL CONNECTION FOR USER: root
+<localhost> EXEC /bin/sh -c 'echo ~root && sleep 0'
+<localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /root/.ansible/tmp `"&& mkdir "` echo /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978 `" && echo ansible-tmp-1766072725.7029562-52-25371828908978="` echo /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978 `" ) && sleep 0'
+Using module file /runner/requirements_collections/ansible_collections/paloaltonetworks/panos/plugins/modules/panos_op.py
+<localhost> PUT /root/.ansible/tmp/ansible-local-10gawrnlco/tmpdy2xz8b7 TO /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978/AnsiballZ_panos_op.py
+<localhost> EXEC /bin/sh -c 'chmod u+x /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978/ /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978/AnsiballZ_panos_op.py && sleep 0'
+<localhost> EXEC /bin/sh -c '/usr/bin/python3 /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978/AnsiballZ_panos_op.py && sleep 0'
+<localhost> EXEC /bin/sh -c 'rm -f -r /root/.ansible/tmp/ansible-tmp-1766072725.7029562-52-25371828908978/ > /devull 2>&1 && sleep 0'
+The full traceback is:
+  File "/tmp/ansible_paloaltonetworks.panos.panos_op_payload_9dmqd8ca/ansible_paloaltonetworks.panos.panos_op_payload.zip/ansible_collections/paloaltonetworks/panos/plugins/module_utils/panos.py", line 183, in get_pandevice_parent
+    importlib.import_module("pan.xapi")
+  File "/usr/lib64/python3.11/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1126, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1140, in _find_and_load_unlocked
+fatal: [localhost]: FAILED! => {
+    "changed": false,
+    "invocation": {
+        "module_args": {
+            "api_key": null,
+            "cmd": "show devices all",
+            "cmd_is_xml": false,
+            "ignore_disconnect": null,
+            "ip_address": null,
+            "password": null,
+            "port": 443,
+            "provider": {
+                "api_key": null,
+                "ip_address": "10.17.37.55",
+                "password": "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER",
+                "port": 443,
+                "serial_number": null,
+                "username": "svc_ansibleapi"
+            },
+            "username": "admin",
+            "vsys": "vsys1"
+        }
+    },
+    "msg": "Missing required library \\"pan-python\\".",
+    "pypi": "https://pypi.org/project/pan-python",
+    "syspath": [
+        "/tmp/ansible_paloaltonetworks.panos.panos_op_payload_9dmqd8ca/ansible_paloaltonetworks.panos.panos_op_payload.zip",
+        "/usr/lib64/python311.zip",
+        "/usr/lib64/python3.11",
+        "/usr/lib64/python3.11/lib-dynload",
+        "/usr/local/lib64/python3.11/site-packages",
+        "/usr/local/lib/python3.11/site-packages",
+        "/usr/lib64/python3.11/site-packages",
+        "/usr/lib/python3.11/site-packages"
+    ]
+}
+...ignoring
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Parse Panorama device list] **********************************************
+task path: /runner/project/site.yml:64
+skipping: [localhost] => {
+    "changed": false,
+    "false_condition": "panorama_devices.stdout_xml is defined",
+    "skip_reason": "Conditional result was False"
+}
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Set empty Panorama info if not available] ********************************
+task path: /runner/project/site.yml:69
+ok: [localhost] => {
+    "ansible_facts": {
+        "panorama_device_info": ""
+    },
+    "changed": false
+}
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Display Panorama verification] *******************************************
+task path: /runner/project/site.yml:74
+ok: [localhost] => {
+    "msg": "Panorama verification skipped (check mode or connection issue)"
+}
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+
+TASK [Get firewall system info via SSH] ****************************************
+task path: /runner/project/site.yml:81
+Read vars_file 'group_vars/all.yml'
+Read vars_file 'vars/panos_version_matrix.yml'
+Read vars_file 'vars/ha_strategies.yml'
+<localhost> ESTABLISH LOCAL CONNECTION FOR USER: root
+<localhost> EXEC /bin/sh -c 'echo ~root && sleep 0'
+<localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /root/.ansible/tmp `"&& mkdir "` echo /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015 `" && echo ansible-tmp-1766072726.5225227-74-12982786110015="` echo /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015 `" ) && sleep 0'
+Using module file /runner/requirements_collections/ansible_collections/paloaltonetworks/panos/plugins/modules/panos_op.py
+<localhost> PUT /root/.ansible/tmp/ansible-local-10gawrnlco/tmpbts5cqji TO /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015/AnsiballZ_panos_op.py
+<localhost> EXEC /bin/sh -c 'chmod u+x /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015/ /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015/AnsiballZ_panos_op.py && sleep 0'
+<localhost> EXEC /bin/sh -c '/usr/bin/python3 /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015/AnsiballZ_panos_op.py && sleep 0'
+<localhost> EXEC /bin/sh -c 'rm -f -r /root/.ansible/tmp/ansible-tmp-1766072726.5225227-74-12982786110015/ > /devull 2>&1 && sleep 0'
+The full traceback is:
+  File "/tmp/ansible_paloaltonetworks.panos.panos_op_payload_9om_x8vc/ansible_paloaltonetworks.panos.panos_op_payload.zip/ansible_collections/paloaltonetworks/panos/plugins/module_utils/panos.py", line 183, in get_pandevice_parent
+    importlib.import_module("pan.xapi")
+  File "/usr/lib64/python3.11/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1126, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1140, in _find_and_load_unlocked
+fatal: [localhost]: FAILED! => {
+    "changed": false,
+    "invocation": {
+        "module_args": {
+            "api_key": null,
+            "cmd": "show system info",
+            "cmd_is_xml": false,
+            "ignore_disconnect": null,
+            "ip_address": null,
+            "password": null,
+            "port": 443,
+            "provider": {
+                "api_key": null,
+                "ip_address": "densecsaasfw02",
+                "password": "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER",
+                "port": 443,
+                "serial_number": null,
+                "username": "svc_ansibleapi"
+            },
+            "username": "admin",
+            "vsys": "vsys1"
+        }
+    },
+    "msg": "Missing required library \\"pan-python\\".",
+    "pypi": "https://pypi.org/project/pan-python",
+    "syspath": [
+        "/tmp/ansible_paloaltonetworks.panos.panos_op_payload_9om_x8vc/ansible_paloaltonetworks.panos.panos_op_payload.zip",
+        "/usr/lib64/python311.zip",
+        "/usr/lib64/python3.11",
+        "/usr/lib64/python3.11/lib-dynload",
+        "/usr/local/lib64/python3.11/site-packages",
+        "/usr/local/lib/python3.11/site-packages",
+        "/usr/lib64/python3.11/site-packages",
+        "/usr/lib/python3.11/site-packages"
+    ]
+}
+
+PLAY RECAP *********************************************************************
+localhost                  : ok=6    changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=1   
