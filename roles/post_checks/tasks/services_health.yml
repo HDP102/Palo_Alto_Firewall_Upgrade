@@ -1,0 +1,88 @@
+---
+# =============================================================================
+# File: roles/post_checks/tasks/services_health.yml
+# Verify Services Health After Upgrade via SSH
+# =============================================================================
+
+- name: Services | Set default values
+  ansible.builtin.set_fact:
+    post_session_count: "0"
+
+- name: Services | Check session info
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show session info"
+  register: session_check
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Services | Parse session count
+  when:
+    - session_check is succeeded
+    - session_check.stdout is defined
+    - session_check.stdout | length > 0
+  block:
+    - name: Services | Extract session count
+      ansible.builtin.set_fact:
+        post_session_count: "{{ session_check.stdout | regex_search('num-active[^0-9]*([0-9]+)') | regex_search('([0-9]+)') | default('0', true) }}"
+      ignore_errors: true
+
+- name: Services | Check interface status
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show interface all"
+  register: interface_check
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Services | Set interface status
+  ansible.builtin.set_fact:
+    interfaces_responding: "{{ interface_check is succeeded }}"
+
+- name: Services | Check routing table
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show routing summary"
+  register: routing_check
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Services | Set routing status
+  ansible.builtin.set_fact:
+    routing_operational: "{{ routing_check is succeeded }}"
+
+- name: Services | Check system resources
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show system resources"
+  register: resources_check
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Services | Set resources status
+  ansible.builtin.set_fact:
+    resources_normal: "{{ resources_check is succeeded }}"
+
+- name: Services | Set overall services status
+  ansible.builtin.set_fact:
+    postcheck_services_passed: >-
+      {{
+        interfaces_responding and
+        routing_operational and
+        resources_normal
+      }}
+
+- name: Services | Display services summary
+  ansible.builtin.debug:
+    msg:
+      - "--- Post-Upgrade Services Status ---"
+      - "Interfaces: {{ 'RESPONDING' if interfaces_responding else 'NOT RESPONDING' }}"
+      - "Routing: {{ 'OPERATIONAL' if routing_operational else 'NOT OPERATIONAL' }}"
+      - "Resources: {{ 'NORMAL' if resources_normal else 'CHECK REQUIRED' }}"
+      - "Active Sessions: {{ post_session_count | default('N/A') }}"
+      - "Overall: {{ 'PASS' if postcheck_services_passed else 'FAIL' }}"
+
+- name: Services | Warn on service issues
+  ansible.builtin.debug:
+    msg: "WARNING: Some services may not be fully operational. Manual verification recommended."
+  when: not postcheck_services_passed

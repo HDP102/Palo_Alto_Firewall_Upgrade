@@ -1,0 +1,152 @@
+---
+# =============================================================================
+# File: roles/upgrade/tasks/download_image.yml
+# Download PAN-OS software via SSH to firewall
+# =============================================================================
+
+- name: Download | Skip if already downloaded
+  ansible.builtin.debug:
+    msg: "Version {{ target_panos_version }} already downloaded on device"
+  when: version_already_downloaded | default(false)
+
+- name: Download | Download target version
+  when: not (version_already_downloaded | default(false))
+  block:
+    - name: Download | Start software download
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ firewall_provider }}"
+        cmd: "request system software download version {{ target_panos_version }}"
+      register: download_response
+      delegate_to: localhost
+
+    - name: Download | Debug raw download response
+      ansible.builtin.debug:
+        msg: "Raw download response: {{ download_response.stdout | default('NO STDOUT') }}"
+
+    # Extract job ID from JSON response
+    - name: Download | Extract job ID from JSON
+      ansible.builtin.set_fact:
+        download_job_id: >-
+          {%- set stdout = download_response.stdout | default('') -%}
+          {%- if stdout -%}
+            {%- set parsed = stdout | from_json -%}
+            {{ parsed.response.result.job | default('') }}
+          {%- else -%}
+            
+          {%- endif -%}
+      ignore_errors: true
+
+    - name: Download | Fail if no job ID captured
+      ansible.builtin.fail:
+        msg: |
+          Failed to extract download job ID from response.
+          Raw response: {{ download_response.stdout | default('NO STDOUT') }}
+          Please check the device manually.
+      when: download_job_id | default('') | trim | length == 0
+
+    - name: Download | Display download started
+      ansible.builtin.debug:
+        msg: "Download started - Job ID: {{ download_job_id }}. This may take several minutes..."
+
+    # Monitor download job - check for status=FIN in JSON response
+    - name: Download | Monitor download progress
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ firewall_provider }}"
+        cmd: "show jobs id {{ download_job_id }}"
+      register: download_job_status
+      delegate_to: localhost
+      until: >-
+        ('"status": "FIN"' in (download_job_status.stdout | default(''))) or
+        ('FIN' in (download_job_status.stdout | default('')))
+      retries: "{{ (download_timeout | default(1800) | int / poll_interval | default(30) | int) | int }}"
+      delay: "{{ poll_interval | default(30) }}"
+
+    - name: Download | Display FINAL job status
+      ansible.builtin.debug:
+        msg: 
+          - "========== DOWNLOAD JOB FINAL STATUS =========="
+          - "{{ download_job_status.stdout | default('no output') }}"
+          - "========== END JOB STATUS =========="
+
+    # Parse job result from JSON
+    - name: Download | Parse job result
+      ansible.builtin.set_fact:
+        download_job_result: >-
+          {%- set stdout = download_job_status.stdout | default('') -%}
+          {%- if stdout -%}
+            {%- set parsed = stdout | from_json -%}
+            {{ parsed.response.result.job | default({}) }}
+          {%- else -%}
+            {}
+          {%- endif -%}
+      ignore_errors: true
+
+    - name: Download | Check download result
+      ansible.builtin.set_fact:
+        download_success: >-
+          {{
+            (download_job_result.status | default('') == 'FIN' and download_job_result.result | default('') == 'OK') or
+            ('"result": "OK"' in (download_job_status.stdout | default('')) and '"status": "FIN"' in (download_job_status.stdout | default('')))
+          }}
+
+    - name: Download | Fail if download job failed
+      ansible.builtin.fail:
+        msg: "Software download failed. Job output: {{ download_job_status.stdout | default('no output') }}"
+      when: not download_success
+
+    - name: Download | Verify download by checking software info
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ firewall_provider }}"
+        cmd: "request system software info"
+      register: post_download_check
+      delegate_to: localhost
+
+    - name: Download | Display software info response
+      ansible.builtin.debug:
+        msg:
+          - "========== SOFTWARE INFO RESPONSE =========="
+          - "{{ post_download_check.stdout | default('NO STDOUT') }}"
+          - "========== END SOFTWARE INFO =========="
+
+    # Parse JSON to verify download status
+    - name: Download | Parse and verify download status
+      ansible.builtin.set_fact:
+        version_confirmed_downloaded: >-
+          {%- if post_download_check.stdout is defined -%}
+            {%- set parsed = post_download_check.stdout | from_json -%}
+            {%- set entries = parsed.response.result['sw-updates'].versions.entry | default([]) -%}
+            {%- set target_entry = entries | selectattr('version', 'equalto', target_panos_version) | list | first | default({}) -%}
+            {{ target_entry.downloaded | default('no') == 'yes' }}
+          {%- else -%}
+            false
+          {%- endif -%}
+      when: post_download_check.stdout is defined
+      ignore_errors: true
+
+    - name: Download | Default verification to false if parsing failed
+      ansible.builtin.set_fact:
+        version_confirmed_downloaded: false
+      when: version_confirmed_downloaded is not defined
+
+    - name: Download | Display verification result
+      ansible.builtin.debug:
+        msg: "Version {{ target_panos_version }} download verified: {{ version_confirmed_downloaded | default(false) }}"
+
+    - name: Download | Fail if version not actually downloaded
+      ansible.builtin.fail:
+        msg: |
+          STOPPING PLAYBOOK - Version {{ target_panos_version }} is NOT showing as downloaded.
+          The download job reported success but the image may not have been saved properly.
+          Review the SOFTWARE INFO RESPONSE above to see actual format.
+          Please check device storage and try again.
+      when:
+        - post_download_check.stdout is defined
+        - not (version_confirmed_downloaded | default(false))
+
+    - name: Download | Display download success
+      ansible.builtin.debug:
+        msg: "Successfully downloaded and verified PAN-OS {{ target_panos_version }}"
+
+- name: Download | Stop if download only mode
+  ansible.builtin.meta: end_play
+  when: download_only | default(false)

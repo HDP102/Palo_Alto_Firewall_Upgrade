@@ -1,0 +1,81 @@
+---
+# =============================================================================
+# File: roles/post_checks/tasks/ha_sync.yml
+# Verify HA Sync After Upgrade via SSH
+# =============================================================================
+
+- name: HA Sync | Get HA state
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show high-availability state"
+  register: post_ha_response
+  delegate_to: localhost
+
+- name: HA Sync | Check if HA enabled
+  ansible.builtin.set_fact:
+    post_ha_enabled: "{{ 'enabled' in (post_ha_response.stdout | default('disabled') | lower) and 'disabled' not in (post_ha_response.stdout | default('disabled') | lower) }}"
+
+- name: HA Sync | Set passed if HA not enabled
+  ansible.builtin.set_fact:
+    postcheck_ha_passed: true
+  when: not post_ha_enabled
+
+- name: HA Sync | Validate HA when enabled
+  when: post_ha_enabled
+  block:
+    - name: HA Sync | Set default HA values
+      ansible.builtin.set_fact:
+        post_ha_local_state: "unknown"
+        post_ha_sync_state: "unknown"
+
+    - name: HA Sync | Extract HA local state
+      ansible.builtin.set_fact:
+        post_ha_local_state: "{{ (post_ha_response.stdout_xml | default('')) | regex_search('<state>([^<]+)</state>') | regex_search('>([^<]+)<') | regex_search('([a-zA-Z-]+)') | default('unknown', true) }}"
+      when: post_ha_response.stdout_xml is defined
+      ignore_errors: true
+
+    - name: HA Sync | Extract HA sync state
+      ansible.builtin.set_fact:
+        post_ha_sync_state: "{{ (post_ha_response.stdout_xml | default('')) | regex_search('<running-sync>([^<]+)</running-sync>') | regex_search('>([^<]+)<') | regex_search('([a-zA-Z-]+)') | default('unknown', true) }}"
+      when: post_ha_response.stdout_xml is defined
+      ignore_errors: true
+
+    - name: HA Sync | Check HA state validity
+      ansible.builtin.set_fact:
+        post_ha_state_valid: >-
+          {{
+            post_ha_local_state | ha_state_is_active or
+            post_ha_local_state | ha_state_is_passive
+          }}
+
+    - name: HA Sync | Check sync status
+      ansible.builtin.set_fact:
+        post_ha_sync_valid: "{{ 'synchronized' in (post_ha_sync_state | lower) }}"
+
+    - name: HA Sync | Wait for sync if not synchronized
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ firewall_provider }}"
+        cmd: "show high-availability state"
+      register: ha_sync_wait
+      delegate_to: localhost
+      until: "'synchronized' in (ha_sync_wait.stdout | default('synchronized')) | lower"
+      retries: "{{ (ha_sync_timeout | int / 15) | int }}"
+      delay: 15
+      when: not post_ha_sync_valid
+
+    - name: HA Sync | Update sync status after wait
+      ansible.builtin.set_fact:
+        post_ha_sync_valid: true
+      when: ha_sync_wait is succeeded
+
+    - name: HA Sync | Set overall HA check result
+      ansible.builtin.set_fact:
+        postcheck_ha_passed: "{{ post_ha_state_valid and post_ha_sync_valid }}"
+
+    - name: HA Sync | Display HA status
+      ansible.builtin.debug:
+        msg:
+          - "--- Post-Upgrade HA Status ---"
+          - "Local State: {{ post_ha_local_state }}"
+          - "Sync Status: {{ post_ha_sync_state }}"
+          - "Overall: {{ 'PASS' if postcheck_ha_passed else 'FAIL' }}"

@@ -1,0 +1,55 @@
+---
+# =============================================================================
+# File: roles/rollback/tasks/main.yml
+# Rollback Role - Main Entry Point
+# Uses paloaltonetworks.panos collection via SSH
+# Default: FULL rollback (config restore + firmware rollback)
+# =============================================================================
+
+- name: Rollback | Load role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/defaults/main.yml"
+
+- name: Rollback | Determine rollback type
+  ansible.builtin.set_fact:
+    rollback_type: "{{ rollback_type_override | default('full') }}"
+
+- name: Rollback | Display rollback start
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "INITIATING ROLLBACK"
+      - "============================================"
+      - "Device: {{ device_hostname }}"
+      - "Rollback Type: {{ rollback_type | upper }}"
+      - "Reason: {{ rollback_reason | default('Upgrade failure or manual trigger') }}"
+      - "============================================"
+
+- name: Rollback | Execute configuration rollback
+  ansible.builtin.include_tasks: config_restore.yml
+  when: rollback_type == 'config' or rollback_type == 'full'
+
+- name: Rollback | Execute firmware rollback
+  ansible.builtin.include_tasks: firmware_rollback.yml
+  when: rollback_type == 'firmware' or rollback_type == 'full'
+
+- name: Rollback | Set rollback result
+  ansible.builtin.set_fact:
+    rollback_completed: true
+    rollback_result:
+      success: "{{ rollback_success | default(false) }}"
+      type: "{{ rollback_type }}"
+      device: "{{ device_hostname }}"
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+
+- name: Rollback | Display rollback summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "ROLLBACK SUMMARY"
+      - "============================================"
+      - "Type: {{ rollback_type | upper }}"
+      - "Config Restore: {{ 'SUCCESS' if (config_restore_success | default(false)) else 'SKIPPED/FAILED' }}"
+      - "Firmware Rollback: {{ 'SUCCESS' if (firmware_rollback_success | default(false)) else 'SKIPPED/FAILED' }}"
+      - "Overall Result: {{ 'SUCCESS' if rollback_success | default(false) else 'FAILED' }}"
+      - "============================================"

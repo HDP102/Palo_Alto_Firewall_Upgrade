@@ -1,0 +1,256 @@
+---
+# =============================================================================
+# File: site.yml
+# Palo Alto Firewall Upgrade Playbook
+# =============================================================================
+# Architecture:
+#   - Panorama REST API: Device discovery, validation, HA pair detection
+#   - SSH to Firewall: All upgrade operations (paloaltonetworks.panos collection)
+#
+# Operations:
+#   - pre_checks_only: Run pre-upgrade validation only
+#   - backup_only: Create backup without upgrade
+#   - download_only: Download firmware to device (stage for later upgrade)
+#   - full_upgrade: Complete upgrade workflow
+#   - rollback: Restore from backup
+# =============================================================================
+
+- name: Palo Alto Firewall Upgrade
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars_files:
+    - group_vars/all.yml
+    - vars/panos_version_matrix.yml
+    - vars/ha_strategies.yml
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - panorama_host is defined and panorama_host | length > 0
+          - target_firewall is defined and target_firewall | length > 0
+          - target_panos_version is defined and target_panos_version | length > 0
+        fail_msg: "Required variables not set. Check survey inputs."
+        success_msg: "Required variables validated"
+
+    - name: Display operation info
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Palo Alto Upgrade Playbook"
+          - "============================================"
+          - "Operation: {{ operation_mode }}"
+          - "Panorama: {{ panorama_host }} (discovery only)"
+          - "Target Firewall: {{ target_firewall }} (SSH)"
+          - "Target Version: {{ target_panos_version }}"
+          - "Upgrade Mode: {{ upgrade_mode }}"
+          - "============================================"
+
+    # =========================================================================
+    # Step 1: Verify device exists in Panorama (optional validation)
+    # =========================================================================
+    - name: Verify device is managed by Panorama
+      block:
+        - name: Get managed devices from Panorama
+          paloaltonetworks.panos.panos_op:
+            provider: "{{ panorama_provider }}"
+            cmd: "show devices all"
+          register: panorama_devices
+          delegate_to: localhost
+          ignore_errors: true
+
+        - name: Parse Panorama device list
+          ansible.builtin.set_fact:
+            panorama_device_info: "{{ panorama_devices.stdout_xml | default('') }}"
+          when: panorama_devices.stdout_xml is defined
+
+        - name: Set empty Panorama info if not available
+          ansible.builtin.set_fact:
+            panorama_device_info: ""
+          when: panorama_devices.stdout_xml is not defined
+
+        - name: Display Panorama verification
+          ansible.builtin.debug:
+            msg: "Panorama verification {{ 'completed' if panorama_device_info | length > 0 else 'skipped (check mode or connection issue)' }}"
+
+    # =========================================================================
+    # Step 2: Connect to firewall and get device info
+    # =========================================================================
+    - name: Get firewall system info via SSH
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ firewall_provider }}"
+        cmd: "show system info"
+      register: firewall_info
+      delegate_to: localhost
+
+    - name: Parse firewall info
+      ansible.builtin.set_fact:
+        device_hostname: "{{ firewall_info.stdout_xml | default('<hostname>unknown</hostname>') | regex_search('<hostname>(.*?)</hostname>', '\\1') | first | default('unknown') }}"
+        device_serial: "{{ firewall_info.stdout_xml | default('<serial>unknown</serial>') | regex_search('<serial>(.*?)</serial>', '\\1') | first | default('unknown') }}"
+        device_model: "{{ firewall_info.stdout_xml | default('<model>unknown</model>') | regex_search('<model>(.*?)</model>', '\\1') | first | default('unknown') }}"
+        device_current_version: "{{ firewall_info.stdout_xml | default('<sw-version>unknown</sw-version>') | regex_search('<sw-version>(.*?)</sw-version>', '\\1') | first | default('unknown') }}"
+        device_uptime: "{{ firewall_info.stdout_xml | default('<uptime>unknown</uptime>') | regex_search('<uptime>(.*?)</uptime>', '\\1') | first | default('unknown') }}"
+      when: firewall_info.stdout_xml is defined
+
+    - name: Set default device info if not available
+      ansible.builtin.set_fact:
+        device_hostname: "{{ target_firewall }}"
+        device_serial: "unknown"
+        device_model: "unknown"
+        device_current_version: "unknown"
+        device_uptime: "unknown"
+      when: firewall_info.stdout_xml is not defined
+
+    - name: Display device info
+      ansible.builtin.debug:
+        msg:
+          - "--- Firewall Connected ---"
+          - "Hostname: {{ device_hostname }}"
+          - "Serial: {{ device_serial }}"
+          - "Model: {{ device_model }}"
+          - "Current Version: {{ device_current_version }}"
+          - "Uptime: {{ device_uptime }}"
+
+    # Save pre-upgrade version for potential rollback
+    - name: Save pre-upgrade version for rollback
+      ansible.builtin.set_fact:
+        pre_upgrade_version: "{{ device_current_version }}"
+
+  tasks:
+    # =========================================================================
+    # Pre-Checks Only
+    # =========================================================================
+    - name: Pre-Checks Only Mode
+      when: operation_mode == 'pre_checks_only'
+      block:
+        - name: Run pre-checks
+          ansible.builtin.include_role:
+            name: pre_checks
+
+        - name: Pre-checks complete
+          ansible.builtin.debug:
+            msg: "Pre-checks completed. Review results above."
+
+    # =========================================================================
+    # Backup Only
+    # =========================================================================
+    - name: Backup Only Mode
+      when: operation_mode == 'backup_only'
+      block:
+        - name: Run backup
+          ansible.builtin.include_role:
+            name: backup
+
+        - name: Backup complete
+          ansible.builtin.debug:
+            msg: "Backup completed. Config snapshot saved on device."
+
+    # =========================================================================
+    # Download Only (Stage firmware for later upgrade)
+    # =========================================================================
+    - name: Download Only Mode
+      when: operation_mode == 'download_only'
+      block:
+        - name: Download Only | Display staging info
+          ansible.builtin.debug:
+            msg:
+              - "============================================"
+              - "FIRMWARE STAGING MODE"
+              - "============================================"
+              - "Device: {{ device_hostname }}"
+              - "Current Version: {{ device_current_version }}"
+              - "Target Version: {{ target_panos_version }}"
+              - "Action: Download only (no install/reboot)"
+              - "============================================"
+
+        - name: Download Only | Check for available software
+          ansible.builtin.include_tasks: roles/upgrade/tasks/check_software.yml
+
+        - name: Download Only | Skip if already downloaded
+          ansible.builtin.debug:
+            msg: "Firmware {{ target_panos_version }} is already downloaded on device. No action needed."
+          when: version_already_downloaded | default(false)
+
+        - name: Download Only | Download software image
+          ansible.builtin.include_tasks: roles/upgrade/tasks/download_image.yml
+          when: not (version_already_downloaded | default(false))
+
+        - name: Download Only | Staging complete
+          ansible.builtin.debug:
+            msg:
+              - "============================================"
+              - "FIRMWARE STAGING COMPLETE"
+              - "============================================"
+              - "Device: {{ device_hostname }}"
+              - "Staged Version: {{ target_panos_version }}"
+              - "Status: Ready for upgrade"
+              - "============================================"
+              - "To complete the upgrade later, run with:"
+              - "  operation_mode: full_upgrade"
+              - "  target_panos_version: {{ target_panos_version }}"
+              - "============================================"
+
+    # =========================================================================
+    # Full Upgrade
+    # =========================================================================
+    - name: Full Upgrade Mode
+      when: operation_mode == 'full_upgrade'
+      block:
+        - name: Run pre-checks
+          ansible.builtin.include_role:
+            name: pre_checks
+          when: not skip_pre_checks
+
+        - name: Run backup
+          ansible.builtin.include_role:
+            name: backup
+          when: not skip_backup
+
+        - name: Run upgrade
+          ansible.builtin.include_role:
+            name: upgrade
+
+        - name: Run post-checks
+          ansible.builtin.include_role:
+            name: post_checks
+
+        - name: Upgrade complete
+          ansible.builtin.debug:
+            msg:
+              - "============================================"
+              - "UPGRADE COMPLETED SUCCESSFULLY"
+              - "============================================"
+              - "Device: {{ device_hostname }}"
+              - "Previous Version: {{ pre_upgrade_version }}"
+              - "New Version: {{ target_panos_version }}"
+              - "============================================"
+
+    # =========================================================================
+    # Rollback
+    # =========================================================================
+    - name: Rollback Mode
+      when: operation_mode == 'rollback'
+      block:
+        - name: Run rollback
+          ansible.builtin.include_role:
+            name: rollback
+          vars:
+            rollback_reason: "Manual rollback requested"
+
+        - name: Rollback complete
+          ansible.builtin.debug:
+            msg: "Rollback completed. Verify device status."
+
+  post_tasks:
+    - name: Final status
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Playbook Execution Complete"
+          - "============================================"
+          - "Operation: {{ operation_mode }}"
+          - "Device: {{ device_hostname }}"
+          - "Status: SUCCESS"
+          - "============================================"

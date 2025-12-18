@@ -1,0 +1,36 @@
+---
+# =============================================================================
+# File: roles/upgrade/defaults/main.yml
+# Upgrade Role - Default Variables
+# =============================================================================
+
+# Upgrade settings
+upgrade_mode: "standalone"
+download_only: false
+force_upgrade: false
+
+# Download settings
+download_timeout: 3600
+download_poll_interval: 30
+
+# Install settings
+install_timeout: 1800
+install_poll_interval: 30
+
+# Reboot settings
+reboot_timeout: 1800
+reboot_poll_interval: 30
+
+# HA settings
+ha_failover_wait: 300
+ha_sync_timeout: 600
+
+# Flags (set during execution)
+upgrade_completed: false
+upgrade_failed: false
+upgrade_not_needed: false
+standalone_upgrade_completed: false
+ha_upgrade_completed: false
+
+# Auto rollback on failure
+auto_rollback_on_failure: true

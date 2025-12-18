@@ -1,0 +1,87 @@
+---
+# =============================================================================
+# File: roles/upgrade/tasks/check_software.yml
+# Check available software versions on device
+# =============================================================================
+
+- name: Check Software | Request software check from Palo Alto servers
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "request system software check"
+  register: software_check_response
+  delegate_to: localhost
+
+- name: Check Software | Wait for check to complete
+  ansible.builtin.pause:
+    seconds: 10
+    prompt: "Waiting for software check to complete..."
+
+- name: Check Software | Get available versions
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "request system software info"
+  register: software_versions_response
+  delegate_to: localhost
+
+- name: Check Software | Debug raw response
+  ansible.builtin.debug:
+    msg: "Raw software info response: {{ software_versions_response.stdout | default('NO STDOUT') }}"
+    verbosity: 1
+
+# Parse the JSON response to extract version entries
+- name: Check Software | Parse software versions from JSON
+  ansible.builtin.set_fact:
+    software_entries: >-
+      {%- if software_versions_response.stdout is defined -%}
+        {%- set parsed = software_versions_response.stdout | from_json -%}
+        {{ parsed.response.result['sw-updates'].versions.entry | default([]) }}
+      {%- else -%}
+        []
+      {%- endif -%}
+  when: software_versions_response.stdout is defined
+  ignore_errors: true
+
+- name: Check Software | Default empty entries if parsing failed
+  ansible.builtin.set_fact:
+    software_entries: []
+  when: software_entries is not defined
+
+# Find target version in parsed entries
+- name: Check Software | Find target version entry
+  ansible.builtin.set_fact:
+    target_version_entry: "{{ software_entries | selectattr('version', 'equalto', target_panos_version) | list | first | default({}) }}"
+  when: software_entries | length > 0
+
+- name: Check Software | Default empty entry if not found
+  ansible.builtin.set_fact:
+    target_version_entry: {}
+  when: target_version_entry is not defined
+
+# Check availability and download status from the parsed entry
+- name: Check Software | Set version availability
+  ansible.builtin.set_fact:
+    target_version_available: "{{ target_version_entry | length > 0 }}"
+
+- name: Check Software | Set download status from parsed entry
+  ansible.builtin.set_fact:
+    version_already_downloaded: "{{ target_version_entry.downloaded | default('no') == 'yes' }}"
+
+- name: Check Software | Fail if version not available
+  ansible.builtin.fail:
+    msg: "Target version {{ target_panos_version }} is not available for download. Run 'request system software check' and verify the version exists."
+  when: 
+    - not target_version_available
+    - software_versions_response.stdout is defined
+
+- name: Check Software | Skip check if stdout not available
+  ansible.builtin.debug:
+    msg: "Software version check skipped (check mode or stdout not available)"
+  when: software_versions_response.stdout is not defined
+
+- name: Check Software | Display software status
+  ansible.builtin.debug:
+    msg:
+      - "Target Version: {{ target_panos_version }}"
+      - "Available: {{ 'YES' if target_version_available else 'UNKNOWN' }}"
+      - "Already Downloaded: {{ 'YES' if version_already_downloaded else 'NO' }}"
+      - "Downloaded field value: {{ target_version_entry.downloaded | default('not found') }}"

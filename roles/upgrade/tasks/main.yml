@@ -1,0 +1,77 @@
+---
+# =============================================================================
+# File: roles/upgrade/tasks/main.yml
+# Upgrade Role - Main Entry Point
+# Uses paloaltonetworks.panos collection via SSH to firewall
+# =============================================================================
+
+- name: Upgrade | Load role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/defaults/main.yml"
+
+- name: Upgrade | Skip if not needed
+  ansible.builtin.debug:
+    msg: "Upgrade skipped - device already at target version {{ target_panos_version }}"
+  when: upgrade_not_needed | default(false)
+
+- name: Upgrade | Execute upgrade
+  when: not (upgrade_not_needed | default(false))
+  block:
+    - name: Upgrade | Check for available software
+      ansible.builtin.include_tasks: check_software.yml
+
+    - name: Upgrade | Download software image
+      ansible.builtin.include_tasks: download_image.yml
+
+    - name: Upgrade | Route to appropriate upgrade method
+      ansible.builtin.include_tasks: "{{ upgrade_task_file }}"
+      vars:
+        upgrade_task_file: "{{ 'ha_pair.yml' if upgrade_mode == 'ha_pair' and ha_pair_info.enabled | default(false) else 'standalone.yml' }}"
+
+    - name: Upgrade | Set upgrade completed flag
+      ansible.builtin.set_fact:
+        upgrade_completed: true
+        upgrade_result:
+          success: true
+          device: "{{ device_hostname }}"
+          from_version: "{{ device_current_version }}"
+          to_version: "{{ target_panos_version }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Upgrade | Display upgrade summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Upgrade Complete"
+          - "============================================"
+          - "Device: {{ device_hostname }}"
+          - "Previous Version: {{ device_current_version }}"
+          - "New Version: {{ target_panos_version }}"
+          - "============================================"
+
+  rescue:
+    - name: Upgrade | Handle upgrade failure
+      ansible.builtin.set_fact:
+        upgrade_completed: false
+        upgrade_failed: true
+        upgrade_error: "{{ ansible_failed_result.msg | default('Unknown error') }}"
+
+    - name: Upgrade | Display failure
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "UPGRADE FAILED"
+          - "============================================"
+          - "Device: {{ device_hostname }}"
+          - "Error: {{ upgrade_error }}"
+          - "============================================"
+
+    - name: Upgrade | Trigger rollback if enabled
+      ansible.builtin.include_role:
+        name: rollback
+      when: auto_rollback_on_failure | default(true)
+
+    - name: Upgrade | Fail playbook
+      ansible.builtin.fail:
+        msg: "Upgrade failed: {{ upgrade_error }}"
+      when: not (auto_rollback_on_failure | default(true))

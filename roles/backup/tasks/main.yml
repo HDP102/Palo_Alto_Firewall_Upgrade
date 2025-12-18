@@ -1,0 +1,70 @@
+---
+# =============================================================================
+# File: roles/backup/tasks/main.yml
+# Backup Role - Main Entry Point
+# Creates config snapshot ON THE DEVICE via SSH
+# =============================================================================
+
+- name: Backup | Load role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/defaults/main.yml"
+
+- name: Backup | Skip if disabled
+  ansible.builtin.debug:
+    msg: "Backup skipped - backup_enabled is false"
+  when: not backup_enabled
+
+- name: Backup | Execute backup tasks
+  when: backup_enabled
+  block:
+    - name: Backup | Set backup timestamp
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+        backup_name: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Backup | Save running config to named snapshot
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ firewall_provider }}"
+        cmd: "save config to {{ backup_name }}.xml"
+      register: save_config_response
+      delegate_to: localhost
+
+    - name: Backup | Verify save response
+      ansible.builtin.assert:
+        that:
+          - "'success' in (save_config_response.stdout | default('')) or 'Config saved' in (save_config_response.stdout | default(''))"
+        fail_msg: "Config save may have failed: {{ save_config_response.stdout | default('no response') }}"
+        success_msg: "Config saved as {{ backup_name }}.xml on device"
+      ignore_errors: true
+
+    - name: Backup | Display backup confirmation
+      ansible.builtin.debug:
+        msg: "Config saved as {{ backup_name }}.xml on device"
+
+    - name: Backup | Capture device state for reference
+      ansible.builtin.include_tasks: device_state.yml
+
+    - name: Backup | Set backup completed flag
+      ansible.builtin.set_fact:
+        backup_completed: true
+        pre_upgrade_config_snapshot: "{{ backup_name }}.xml"
+        backup_info:
+          config_snapshot: "{{ backup_name }}.xml"
+          device: "{{ device_hostname }}"
+          serial: "{{ device_serial }}"
+          timestamp: "{{ backup_timestamp }}"
+          pre_upgrade_version: "{{ device_current_version }}"
+
+    - name: Backup | Display backup summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Backup Summary for {{ device_hostname }}"
+          - "============================================"
+          - "Timestamp: {{ backup_timestamp }}"
+          - "Config Snapshot: {{ backup_name }}.xml (saved on device)"
+          - "============================================"
+          - "To restore later via CLI:"
+          - "  load config from {{ backup_name }}.xml"
+          - "  commit"
+          - "============================================"

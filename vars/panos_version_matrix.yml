@@ -1,0 +1,183 @@
+---
+# =============================================================================
+# PAN-OS Version Upgrade Matrix
+# =============================================================================
+# Defines valid upgrade paths between PAN-OS versions
+# Reference: https://docs.paloaltonetworks.com/pan-os/upgrade-path
+
+# -----------------------------------------------------------------------------
+# Version Compatibility Matrix
+# -----------------------------------------------------------------------------
+version_matrix:
+
+  # PAN-OS 9.1.x upgrade paths
+  "9.1":
+    direct_upgrade_to:
+      - "10.0"
+      - "10.1"
+    intermediate_required:
+      "10.2": ["10.1"]
+      "11.0": ["10.1", "10.2"]
+      "11.1": ["10.1", "10.2", "11.0"]
+    minimum_version: "9.1.0"
+    end_of_life: "2025-03-01"
+
+  # PAN-OS 10.0.x upgrade paths
+  "10.0":
+    direct_upgrade_to:
+      - "10.1"
+      - "10.2"
+    intermediate_required:
+      "11.0": ["10.2"]
+      "11.1": ["10.2", "11.0"]
+    minimum_version: "10.0.0"
+    end_of_life: "2024-07-16"
+
+  # PAN-OS 10.1.x upgrade paths
+  "10.1":
+    direct_upgrade_to:
+      - "10.2"
+      - "11.0"
+    intermediate_required:
+      "11.1": ["10.2", "11.0"]
+      "11.2": ["10.2", "11.0", "11.1"]
+    minimum_version: "10.1.0"
+    end_of_life: "2026-03-01"
+
+  # PAN-OS 10.2.x upgrade paths
+  "10.2":
+    direct_upgrade_to:
+      - "11.0"
+      - "11.1"
+    intermediate_required:
+      "11.2": ["11.0", "11.1"]
+    minimum_version: "10.2.0"
+    end_of_life: "2027-08-27"
+
+  # PAN-OS 11.0.x upgrade paths
+  "11.0":
+    direct_upgrade_to:
+      - "11.1"
+      - "11.2"
+    intermediate_required: {}
+    minimum_version: "11.0.0"
+    end_of_life: "2026-11-17"
+
+  # PAN-OS 11.1.x upgrade paths
+  "11.1":
+    direct_upgrade_to:
+      - "11.2"
+    intermediate_required: {}
+    minimum_version: "11.1.0"
+    end_of_life: "2027-11-17"
+
+  # PAN-OS 11.2.x upgrade paths
+  "11.2":
+    direct_upgrade_to: []
+    intermediate_required: {}
+    minimum_version: "11.2.0"
+    end_of_life: "2028-11-17"
+
+# -----------------------------------------------------------------------------
+# Recommended Versions (latest stable per major.minor)
+# -----------------------------------------------------------------------------
+recommended_versions:
+  "9.1": "9.1.19"
+  "10.0": "10.0.12-h5"
+  "10.1": "10.1.14-h6"
+  "10.2": "10.2.10-h3"
+  "11.0": "11.0.6"
+  "11.1": "11.1.5"
+  "11.2": "11.2.3"
+
+# -----------------------------------------------------------------------------
+# Content Version Requirements
+# -----------------------------------------------------------------------------
+content_requirements:
+  "10.2":
+    minimum_content: "8600"
+    minimum_antivirus: "4400"
+  "11.0":
+    minimum_content: "8700"
+    minimum_antivirus: "4500"
+  "11.1":
+    minimum_content: "8800"
+    minimum_antivirus: "4600"
+  "11.2":
+    minimum_content: "8900"
+    minimum_antivirus: "4700"
+
+# -----------------------------------------------------------------------------
+# Known Issues / Caveats
+# -----------------------------------------------------------------------------
+upgrade_notes:
+  "10.2.0":
+    - "Requires content version 8600 or later"
+    - "Log forwarding format changes - verify SIEM compatibility"
+
+  "11.0.0":
+    - "SD-WAN configuration migration required"
+    - "Plugin compatibility check recommended"
+
+  "11.1.0":
+    - "Cloud-delivered security services require reconfiguration"
+    - "Minimum 16GB memory recommended"
+
+  "11.2.0":
+    - "New logging format - update log collectors first"
+    - "Panorama 11.2 required for full feature support"
+
+# -----------------------------------------------------------------------------
+# Downgrade Restrictions
+# -----------------------------------------------------------------------------
+downgrade_restrictions:
+  - from: "11.0"
+    to: "10.1"
+    allowed: false
+    reason: "Configuration schema incompatibility"
+
+  - from: "11.1"
+    to: "10.2"
+    allowed: false
+    reason: "Database schema changes prevent rollback"
+
+  - from: "11.2"
+    to: "11.0"
+    allowed: false
+    reason: "Logging subsystem changes"
+
+# -----------------------------------------------------------------------------
+# Platform-Specific Minimum Versions
+# -----------------------------------------------------------------------------
+platform_minimums:
+  PA-400:
+    minimum: "10.1.0"
+    recommended: "10.2.10"
+
+  PA-1400:
+    minimum: "10.1.0"
+    recommended: "10.2.10"
+
+  PA-3400:
+    minimum: "10.1.0"
+    recommended: "11.1.5"
+
+  PA-5200:
+    minimum: "9.1.0"
+    recommended: "10.2.10"
+
+  PA-5400:
+    minimum: "10.1.0"
+    recommended: "11.1.5"
+
+  PA-7000:
+    minimum: "9.1.0"
+    recommended: "10.2.10"
+
+  VM-Series:
+    minimum: "9.1.0"
+    recommended: "11.1.5"
+
+  CN-Series:
+    minimum: "10.1.0"
+    recommended: "11.1.5"

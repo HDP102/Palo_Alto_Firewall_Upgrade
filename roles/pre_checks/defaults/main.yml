@@ -1,0 +1,26 @@
+---
+# =============================================================================
+# File: roles/pre_checks/defaults/main.yml
+# Pre-Checks Role - Default Variables
+# =============================================================================
+# File: roles/pre_checks/defaults/main.yml
+
+# Pre-check result flags (set during execution)
+precheck_connectivity_passed: false
+precheck_health_passed: false
+precheck_ha_passed: true
+precheck_upgrade_path_valid: false
+precheck_all_passed: false
+
+# Health thresholds (can be overridden in group_vars)
+precheck_thresholds:
+  cpu_percent_max: 80
+  memory_percent_max: 80
+  disk_percent_max: 80
+  min_uptime_minutes: 30
+
+# Skip options
+skip_pre_checks: false
+skip_health_checks: false
+skip_ha_checks: false
+skip_version_check: false

@@ -1,0 +1,112 @@
+---
+# =============================================================================
+# File: roles/pre_checks/tasks/ha_status.yml
+# HA Status Checks via SSH using paloaltonetworks.panos
+# =============================================================================
+
+- name: HA | Get HA state
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show high-availability state"
+  register: ha_response
+  delegate_to: localhost
+
+- name: HA | Check if HA is enabled
+  ansible.builtin.set_fact:
+    ha_enabled: "{{ 'enabled' in (ha_response.stdout | default('disabled') | lower) and 'disabled' not in (ha_response.stdout | default('disabled') | lower) }}"
+
+- name: HA | Set standalone mode if HA not enabled
+  ansible.builtin.set_fact:
+    precheck_ha_passed: true
+    ha_mode: "standalone"
+    ha_local_state: "standalone"
+    ha_peer_state: "n/a"
+  when: not ha_enabled
+
+- name: HA | Parse HA details when enabled
+  when: ha_enabled
+  block:
+    - name: HA | Set default HA values
+      ansible.builtin.set_fact:
+        ha_local_state: "unknown"
+        ha_peer_state: "unknown"
+        ha_running_sync: "unknown"
+        ha_peer_ip: ""
+
+    - name: HA | Extract local state
+      ansible.builtin.set_fact:
+        ha_local_state: "{{ (ha_response.stdout_xml | default('')) | regex_search('<state>([^<]+)</state>') | regex_search('>([^<]+)<') | regex_search('([a-zA-Z-]+)') | default('unknown', true) }}"
+      when: ha_response.stdout_xml is defined
+      ignore_errors: true
+
+    - name: HA | Extract peer state
+      ansible.builtin.set_fact:
+        ha_peer_state: "{{ (ha_response.stdout_xml | default('')) | regex_search('<peer-info>.*?<state>([^<]+)</state>') | regex_search('>([^<]+)<') | regex_search('([a-zA-Z-]+)') | default('unknown', true) }}"
+      when: ha_response.stdout_xml is defined
+      ignore_errors: true
+
+    - name: HA | Extract running sync status
+      ansible.builtin.set_fact:
+        ha_running_sync: "{{ (ha_response.stdout_xml | default('')) | regex_search('<running-sync>([^<]+)</running-sync>') | regex_search('>([^<]+)<') | regex_search('([a-zA-Z-]+)') | default('unknown', true) }}"
+      when: ha_response.stdout_xml is defined
+      ignore_errors: true
+
+    - name: HA | Extract peer IP
+      ansible.builtin.set_fact:
+        ha_peer_ip: "{{ (ha_response.stdout_xml | default('')) | regex_search('<mgmt-ip>([^<]+)</mgmt-ip>') | regex_search('>([^<]+)<') | regex_search('([0-9.]+)') | default('', true) }}"
+      when: ha_response.stdout_xml is defined
+      ignore_errors: true
+
+    - name: HA | Validate HA state
+      ansible.builtin.set_fact:
+        ha_state_valid: >-
+          {{
+            ha_local_state | ha_state_is_active or
+            ha_local_state | ha_state_is_passive
+          }}
+
+    - name: HA | Check peer is in valid state
+      ansible.builtin.set_fact:
+        ha_peer_state_valid: >-
+          {{
+            ha_peer_state | ha_state_is_active or
+            ha_peer_state | ha_state_is_passive
+          }}
+
+    - name: HA | Check config is synchronized
+      ansible.builtin.set_fact:
+        ha_sync_valid: "{{ 'synchronized' in (ha_running_sync | lower) }}"
+
+    - name: HA | Determine active/passive role
+      ansible.builtin.set_fact:
+        device_is_active: "{{ ha_local_state | ha_state_is_active }}"
+        device_is_passive: "{{ ha_local_state | ha_state_is_passive }}"
+
+    - name: HA | Set overall HA check status
+      ansible.builtin.set_fact:
+        precheck_ha_passed: >-
+          {{
+            ha_state_valid and
+            ha_peer_state_valid and
+            ha_sync_valid
+          }}
+
+    - name: HA | Store HA pair info for upgrade role
+      ansible.builtin.set_fact:
+        ha_pair_info:
+          enabled: true
+          local_state: "{{ ha_local_state }}"
+          local_is_active: "{{ device_is_active }}"
+          peer_state: "{{ ha_peer_state }}"
+          peer_ip: "{{ ha_peer_ip }}"
+          sync_state: "{{ ha_running_sync }}"
+
+    - name: HA | Display HA summary
+      ansible.builtin.debug:
+        msg:
+          - "--- HA Status ---"
+          - "Local State: {{ ha_local_state }} ({{ 'ACTIVE' if device_is_active else 'PASSIVE' }})"
+          - "Peer State: {{ ha_peer_state }}"
+          - "Peer IP: {{ ha_peer_ip }}"
+          - "Config Sync: {{ ha_running_sync }} - {{ 'PASS' if ha_sync_valid else 'FAIL' }}"
+          - "Overall HA Check: {{ 'PASS' if precheck_ha_passed else 'FAIL' }}"

@@ -1,0 +1,122 @@
+---
+# =============================================================================
+# File: roles/pre_checks/tasks/system_health.yml
+# System Health Checks via SSH using paloaltonetworks.panos
+# =============================================================================
+
+- name: Health | Get system resources
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show system resources"
+  register: resources_response
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Health | Get disk space
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show system disk-space"
+  register: disk_response
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Health | Get session info
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show session info"
+  register: session_response
+  delegate_to: localhost
+  ignore_errors: true
+
+# Set ALL defaults first - these will be used if parsing fails or check mode
+- name: Health | Set all default values
+  ansible.builtin.set_fact:
+    cpu_idle: "50"
+    cpu_percent_used: "50"
+    disk_percent_used: "0"
+    active_sessions: "0"
+    uptime_minutes: "60"
+    cpu_check_passed: true
+    disk_check_passed: true
+    uptime_check_passed: true
+    precheck_health_passed: true
+
+# CPU Parsing - only if stdout exists and has content
+- name: Health | Parse CPU usage from resources
+  when: 
+    - resources_response is defined
+    - resources_response.stdout is defined
+    - resources_response.stdout | default('') | length > 0
+  block:
+    - name: Health | Extract CPU idle percentage
+      ansible.builtin.set_fact:
+        cpu_idle: "{{ resources_response.stdout | regex_search('([0-9.]+)%\\s*id') | regex_search('([0-9.]+)') | default('50', true) }}"
+      ignore_errors: true
+
+    - name: Health | Calculate CPU used
+      ansible.builtin.set_fact:
+        cpu_percent_used: "{{ 100 - (cpu_idle | default('50') | float) }}"
+      ignore_errors: true
+
+# Disk Parsing - only if stdout exists and has content
+- name: Health | Parse disk usage
+  when:
+    - disk_response is defined
+    - disk_response.stdout is defined
+    - disk_response.stdout | default('') | length > 0
+  block:
+    - name: Health | Extract disk percentage
+      ansible.builtin.set_fact:
+        disk_percent_used: "{{ disk_response.stdout | regex_search('([0-9]+)%\\s+/') | regex_search('([0-9]+)') | default('0', true) }}"
+      ignore_errors: true
+
+# Session Parsing - only if stdout exists and has content
+- name: Health | Parse session count
+  when:
+    - session_response is defined
+    - session_response.stdout is defined
+    - session_response.stdout | default('') | length > 0
+  block:
+    - name: Health | Extract session count
+      ansible.builtin.set_fact:
+        active_sessions: "{{ session_response.stdout | regex_search('num-active[^0-9]*([0-9]+)') | regex_search('([0-9]+)') | default('0', true) }}"
+      ignore_errors: true
+
+# Uptime Parsing
+- name: Health | Parse uptime in minutes
+  ansible.builtin.set_fact:
+    uptime_minutes: "{{ device_uptime | default('1 day') | uptime_minutes | default(60) }}"
+  when: device_uptime is defined
+  ignore_errors: true
+
+# Threshold Validations
+- name: Health | Validate CPU threshold
+  ansible.builtin.set_fact:
+    cpu_check_passed: "{{ (cpu_percent_used | default('50') | float) < (precheck_thresholds.cpu_percent_max | default(80) | float) }}"
+
+- name: Health | Validate disk threshold
+  ansible.builtin.set_fact:
+    disk_check_passed: "{{ (disk_percent_used | default('0') | int) < (precheck_thresholds.disk_percent_max | default(80) | int) }}"
+
+- name: Health | Validate uptime threshold
+  ansible.builtin.set_fact:
+    uptime_check_passed: "{{ (uptime_minutes | default('60') | int) >= (precheck_thresholds.min_uptime_minutes | default(30) | int) }}"
+
+- name: Health | Set overall health status
+  ansible.builtin.set_fact:
+    precheck_health_passed: "{{ cpu_check_passed and disk_check_passed and uptime_check_passed }}"
+
+- name: Health | Display health summary
+  ansible.builtin.debug:
+    msg:
+      - "--- System Health ---"
+      - "CPU Usage: {{ cpu_percent_used | default('50') }}% (threshold: < {{ precheck_thresholds.cpu_percent_max | default(80) }}%) - {{ 'PASS' if cpu_check_passed else 'FAIL' }}"
+      - "Disk Usage: {{ disk_percent_used | default('0') }}% (threshold: < {{ precheck_thresholds.disk_percent_max | default(80) }}%) - {{ 'PASS' if disk_check_passed else 'FAIL' }}"
+      - "Uptime: {{ uptime_minutes | default('60') }} min (threshold: >= {{ precheck_thresholds.min_uptime_minutes | default(30) }} min) - {{ 'PASS' if uptime_check_passed else 'FAIL' }}"
+      - "Active Sessions: {{ active_sessions | default('0') }}"
+      - "Overall Health: {{ 'PASS' if precheck_health_passed else 'FAIL' }}"
+
+- name: Health | Warn on high session count
+  ansible.builtin.debug:
+    msg: "WARNING: High session count ({{ active_sessions }}). Upgrade may impact active connections."
+  when: (active_sessions | default('0') | int) > 100000

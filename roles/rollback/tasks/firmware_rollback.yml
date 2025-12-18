@@ -1,0 +1,308 @@
+---
+# =============================================================================
+# File: roles/rollback/tasks/firmware_rollback.yml
+# Firmware Rollback via SSH
+# Auto-detects previous version from device if not specified
+# =============================================================================
+
+- name: Firmware Rollback | Get current system info
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show system info"
+  register: current_system_info
+  delegate_to: localhost
+
+- name: Firmware Rollback | Debug current system info
+  ansible.builtin.debug:
+    msg: "Current system info: {{ current_system_info.stdout | default('NO STDOUT') }}"
+    verbosity: 1
+
+# Extract current version for reference
+- name: Firmware Rollback | Extract current version
+  ansible.builtin.set_fact:
+    current_version: >-
+      {%- if current_system_info.stdout_xml is defined and '<sw-version>' in (current_system_info.stdout_xml | default('')) -%}
+        {{ current_system_info.stdout_xml | regex_search('<sw-version>([^<]+)</sw-version>', '\1') | first }}
+      {%- elif current_system_info.stdout is defined -%}
+        {%- set stdout = current_system_info.stdout -%}
+        {%- if stdout is mapping -%}
+          {{ stdout.response.result.system['sw-version'] | default('unknown') }}
+        {%- else -%}
+          {%- set parsed = stdout | from_json -%}
+          {{ parsed.response.result.system['sw-version'] | default('unknown') }}
+        {%- endif -%}
+      {%- else -%}
+        unknown
+      {%- endif -%}
+  ignore_errors: true
+
+- name: Firmware Rollback | Get available software versions
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "request system software info"
+  register: software_versions
+  delegate_to: localhost
+
+- name: Firmware Rollback | Debug software versions response
+  ansible.builtin.debug:
+    msg: "Available software: {{ software_versions.stdout | default('NO STDOUT') }}"
+    verbosity: 1
+
+# Parse JSON to get all version entries with their status
+- name: Firmware Rollback | Parse software version details
+  ansible.builtin.set_fact:
+    software_entries: >-
+      {%- if software_versions.stdout is defined -%}
+        {%- if software_versions.stdout is mapping -%}
+          {{ software_versions.stdout.response.result['sw-updates'].versions.entry | default([]) }}
+        {%- else -%}
+          {%- set parsed = software_versions.stdout | from_json -%}
+          {{ parsed.response.result['sw-updates'].versions.entry | default([]) }}
+        {%- endif -%}
+      {%- else -%}
+        []
+      {%- endif -%}
+  ignore_errors: true
+
+- name: Firmware Rollback | Default empty entries if parsing failed
+  ansible.builtin.set_fact:
+    software_entries: []
+  when: software_entries is not defined
+
+# Find versions that are already downloaded (available for install without download)
+- name: Firmware Rollback | Find downloaded versions
+  ansible.builtin.set_fact:
+    downloaded_versions: "{{ software_entries | selectattr('downloaded', 'equalto', 'yes') | map(attribute='version') | list }}"
+  when: software_entries | length > 0
+
+- name: Firmware Rollback | Default empty downloaded versions
+  ansible.builtin.set_fact:
+    downloaded_versions: []
+  when: downloaded_versions is not defined
+
+# Auto-detect rollback version: use pre_upgrade_version if set, otherwise find previous downloaded version
+- name: Firmware Rollback | Determine rollback version
+  ansible.builtin.set_fact:
+    rollback_version: >-
+      {%- if rollback_target_version is defined and rollback_target_version | length > 0 -%}
+        {{ rollback_target_version }}
+      {%- elif pre_upgrade_version is defined and pre_upgrade_version | length > 0 -%}
+        {{ pre_upgrade_version }}
+      {%- elif device_current_version is defined and device_current_version != current_version -%}
+        {{ device_current_version }}
+      {%- else -%}
+        auto_detect
+      {%- endif -%}
+
+# If still auto_detect, try to find any downloaded version that isn't current
+- name: Firmware Rollback | Auto-detect from downloaded versions
+  ansible.builtin.set_fact:
+    rollback_version: "{{ (downloaded_versions | reject('equalto', current_version) | list | first) | default('') }}"
+  when: rollback_version == 'auto_detect'
+
+- name: Firmware Rollback | Display rollback plan
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "FIRMWARE ROLLBACK PLAN"
+      - "============================================"
+      - "Current Version: {{ current_version }}"
+      - "Rollback Target: {{ rollback_version }}"
+      - "Downloaded Versions: {{ downloaded_versions | join(', ') | default('none found') }}"
+      - "============================================"
+
+- name: Firmware Rollback | Fail if no rollback version determined
+  ansible.builtin.fail:
+    msg: |
+      STOPPING - Could not determine rollback version.
+      Current version: {{ current_version }}
+      Downloaded versions: {{ downloaded_versions | join(', ') | default('none') }}
+      
+      Please specify rollback_target_version manually, or ensure the previous
+      version is still downloaded on the device.
+  when: rollback_version | length == 0
+
+- name: Firmware Rollback | Verify rollback version is downloaded
+  ansible.builtin.set_fact:
+    rollback_version_ready: "{{ rollback_version in downloaded_versions }}"
+
+- name: Firmware Rollback | Warn if version not downloaded
+  ansible.builtin.debug:
+    msg: "WARNING: Rollback version {{ rollback_version }} is not showing as downloaded. Will attempt install anyway (may need to download first)."
+  when: not rollback_version_ready
+
+- name: Firmware Rollback | Install rollback version
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "request system software install version {{ rollback_version }}"
+  register: rollback_install_response
+  delegate_to: localhost
+
+- name: Firmware Rollback | Debug install response
+  ansible.builtin.debug:
+    msg: "Install response: {{ rollback_install_response.stdout | default('NO STDOUT') }}"
+
+# Extract job ID from JSON response
+- name: Firmware Rollback | Extract job ID
+  ansible.builtin.set_fact:
+    rollback_job_id: >-
+      {%- set stdout = rollback_install_response.stdout | default('') -%}
+      {%- if stdout -%}
+        {%- if stdout is mapping -%}
+          {{ stdout.response.result.job | default('') }}
+        {%- else -%}
+          {%- set parsed = stdout | from_json -%}
+          {{ parsed.response.result.job | default('') }}
+        {%- endif -%}
+      {%- else -%}
+        
+      {%- endif -%}
+  ignore_errors: true
+
+- name: Firmware Rollback | Fail if no job ID
+  ansible.builtin.fail:
+    msg: |
+      STOPPING - Failed to extract rollback install job ID.
+      Raw response: {{ rollback_install_response.stdout | default('NO STDOUT') }}
+  when: rollback_job_id | default('') | trim | length == 0
+
+- name: Firmware Rollback | Display job started
+  ansible.builtin.debug:
+    msg: "Rollback installation started - Job ID: {{ rollback_job_id }}"
+
+# Monitor installation - check for status=FIN in JSON
+- name: Firmware Rollback | Monitor installation
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show jobs id {{ rollback_job_id }}"
+  register: rollback_job_status
+  delegate_to: localhost
+  until: >-
+    ('"status": "FIN"' in (rollback_job_status.stdout | default('') | string)) or
+    ('"status":"FIN"' in (rollback_job_status.stdout | default('') | string))
+  retries: 60
+  delay: 30
+  when: rollback_job_id | trim | length > 0
+
+- name: Firmware Rollback | Display job status
+  ansible.builtin.debug:
+    msg:
+      - "========== ROLLBACK JOB FINAL STATUS =========="
+      - "{{ rollback_job_status.stdout | default('no output') }}"
+      - "========== END JOB STATUS =========="
+
+# Check job success
+- name: Firmware Rollback | Check installation result
+  ansible.builtin.set_fact:
+    rollback_install_success: >-
+      {{
+        ('"result": "OK"' in (rollback_job_status.stdout | default('') | string) and '"status": "FIN"' in (rollback_job_status.stdout | default('') | string)) or
+        ('"result":"OK"' in (rollback_job_status.stdout | default('') | string) and '"status":"FIN"' in (rollback_job_status.stdout | default('') | string))
+      }}
+
+- name: Firmware Rollback | Fail if installation failed
+  ansible.builtin.fail:
+    msg: |
+      STOPPING - Rollback installation failed.
+      Job output: {{ rollback_job_status.stdout | default('no output') }}
+  when: not rollback_install_success
+
+- name: Firmware Rollback | Reboot device
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "request restart system"
+  register: reboot_response
+  delegate_to: localhost
+
+- name: Firmware Rollback | Wait for reboot
+  ansible.builtin.pause:
+    seconds: 60
+    prompt: "Waiting for device to begin reboot..."
+
+- name: Firmware Rollback | Wait for device to come back online
+  ansible.builtin.wait_for:
+    host: "{{ firewall_provider.ip_address }}"
+    port: 443
+    state: started
+    delay: 30
+    timeout: "{{ reboot_timeout }}"
+  delegate_to: localhost
+
+- name: Firmware Rollback | Additional wait for services
+  ansible.builtin.pause:
+    seconds: 90
+    prompt: "Waiting for management services to initialize..."
+
+- name: Firmware Rollback | Verify rollback version
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show system info"
+  register: post_rollback_info
+  delegate_to: localhost
+  retries: 10
+  delay: 30
+  until: post_rollback_info is succeeded
+
+- name: Firmware Rollback | Debug post-rollback response
+  ansible.builtin.debug:
+    msg:
+      - "========== POST-ROLLBACK SYSTEM INFO =========="
+      - "stdout_xml: {{ post_rollback_info.stdout_xml | default('NO XML') }}"
+      - "stdout: {{ post_rollback_info.stdout | default('NO STDOUT') }}"
+      - "========== END SYSTEM INFO =========="
+
+# Extract version - try XML first, then JSON
+- name: Firmware Rollback | Set default rollback version
+  ansible.builtin.set_fact:
+    post_rollback_version: "unknown"
+
+- name: Firmware Rollback | Extract version from XML
+  ansible.builtin.set_fact:
+    post_rollback_version: "{{ post_rollback_info.stdout_xml | regex_search('<sw-version>([^<]+)</sw-version>', '\\1') | first }}"
+  when: 
+    - post_rollback_info.stdout_xml is defined
+    - "'<sw-version>' in (post_rollback_info.stdout_xml | default(''))"
+  ignore_errors: true
+
+# Fallback: try JSON parsing
+- name: Firmware Rollback | Extract version from JSON (fallback)
+  ansible.builtin.set_fact:
+    post_rollback_version: >-
+      {%- set stdout = post_rollback_info.stdout | default('') -%}
+      {%- if stdout -%}
+        {%- if stdout is mapping -%}
+          {{ stdout.response.result.system['sw-version'] | default('unknown') }}
+        {%- else -%}
+          {%- set parsed = stdout | from_json -%}
+          {{ parsed.response.result.system['sw-version'] | default('unknown') }}
+        {%- endif -%}
+      {%- else -%}
+        unknown
+      {%- endif -%}
+  when: post_rollback_version == 'unknown'
+  ignore_errors: true
+
+- name: Firmware Rollback | Display extracted version
+  ansible.builtin.debug:
+    msg: "Detected version after rollback: {{ post_rollback_version }}"
+
+- name: Firmware Rollback | Validate rollback success
+  ansible.builtin.set_fact:
+    firmware_rollback_success: "{{ post_rollback_version == rollback_version }}"
+    rollback_success: "{{ post_rollback_version == rollback_version }}"
+
+- name: Firmware Rollback | Display result
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "FIRMWARE ROLLBACK {{ 'SUCCESSFUL' if rollback_success else 'FAILED' }}"
+      - "============================================"
+      - "Previous Version: {{ current_version }}"
+      - "Target Version: {{ rollback_version }}"
+      - "Actual Version: {{ post_rollback_version }}"
+      - "============================================"
+
+- name: Firmware Rollback | Fail if version mismatch
+  ansible.builtin.fail:
+    msg: "Rollback verification failed. Expected: {{ rollback_version }}, Got: {{ post_rollback_version }}"
+  when: not rollback_success

@@ -1,0 +1,22 @@
+---
+# =============================================================================
+# File: roles/post_checks/defaults/main.yml
+# Post-Checks Role - Default Variables
+# =============================================================================
+
+# Stabilization wait after upgrade
+post_upgrade_stabilization_wait: 60
+
+# Post-check result flags
+postcheck_version_passed: false
+postcheck_ha_passed: true
+postcheck_services_passed: false
+postcheck_all_passed: false
+
+# Skip options
+skip_version_validation: false
+skip_ha_validation: false
+skip_services_validation: false
+
+# HA sync timeout
+ha_sync_timeout: 600

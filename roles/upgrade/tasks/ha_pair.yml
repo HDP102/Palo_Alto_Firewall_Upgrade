@@ -1,0 +1,192 @@
+---
+# =============================================================================
+# File: roles/upgrade/tasks/ha_pair.yml
+# HA Pair Upgrade via SSH
+# Sequential strategy: passive first, failover, then former active
+# =============================================================================
+
+- name: HA Upgrade | Load HA strategies
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/vars/ha_strategies.yml"
+
+- name: HA Upgrade | Display upgrade plan
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "HA Pair Upgrade - Sequential Strategy"
+      - "============================================"
+      - "Primary Device: {{ target_firewall }}"
+      - "Local State: {{ ha_pair_info.local_state }}"
+      - "Peer IP: {{ ha_pair_info.peer_ip }}"
+      - "Peer State: {{ ha_pair_info.peer_state }}"
+      - "Target Version: {{ target_panos_version }}"
+      - "============================================"
+
+- name: HA Upgrade | Determine upgrade order
+  ansible.builtin.set_fact:
+    local_is_active: "{{ ha_pair_info.local_is_active }}"
+    passive_ip: "{{ ha_pair_info.peer_ip if local_is_active else target_firewall }}"
+    active_ip: "{{ target_firewall if local_is_active else ha_pair_info.peer_ip }}"
+
+- name: HA Upgrade | Set passive device provider
+  ansible.builtin.set_fact:
+    passive_provider:
+      ip_address: "{{ passive_ip }}"
+      username: "{{ ansible_user }}"
+      password: "{{ ansible_password }}"
+
+- name: HA Upgrade | Set active device provider
+  ansible.builtin.set_fact:
+    active_provider:
+      ip_address: "{{ active_ip }}"
+      username: "{{ ansible_user }}"
+      password: "{{ ansible_password }}"
+
+# =============================================================================
+# Step 1: Upgrade Passive Device
+# =============================================================================
+
+- name: HA Upgrade | Step 1 - Upgrade passive device
+  ansible.builtin.debug:
+    msg: "Upgrading passive device: {{ passive_ip }}"
+
+- name: HA Upgrade | Download image to passive
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ passive_provider }}"
+    cmd: "request system software download version {{ target_panos_version }}"
+  register: passive_download
+  delegate_to: localhost
+
+- name: HA Upgrade | Get passive download job ID
+  ansible.builtin.set_fact:
+    passive_download_job: "{{ (passive_download.stdout | default('job 0')) | regex_search('job ([0-9]+)') | regex_search('([0-9]+)') | default('', true) }}"
+
+- name: HA Upgrade | Wait for passive download
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ passive_provider }}"
+    cmd: "show jobs id {{ passive_download_job }}"
+  register: passive_download_status
+  delegate_to: localhost
+  until: "'FIN' in (passive_download_status.stdout | default('FIN'))"
+  retries: "{{ (download_timeout | int / poll_interval | int) | int }}"
+  delay: "{{ poll_interval }}"
+  when: passive_download_job | length > 0
+
+- name: HA Upgrade | Install on passive device
+  ansible.builtin.set_fact:
+    install_provider: "{{ passive_provider }}"
+
+- name: HA Upgrade | Execute passive installation
+  ansible.builtin.include_tasks: install.yml
+
+- name: HA Upgrade | Wait for passive to rejoin HA
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ passive_provider }}"
+    cmd: "show high-availability state"
+  register: passive_ha_state
+  delegate_to: localhost
+  until: "'passive' in (passive_ha_state.stdout | default('passive')) | lower or 'active' in (passive_ha_state.stdout | default('')) | lower"
+  retries: 40
+  delay: 30
+
+- name: HA Upgrade | Verify passive device version
+  ansible.builtin.debug:
+    msg: "Passive device {{ passive_ip }} successfully upgraded"
+
+# =============================================================================
+# Step 2: Failover to Upgraded Device
+# =============================================================================
+
+- name: HA Upgrade | Step 2 - Trigger failover
+  ansible.builtin.debug:
+    msg: "Triggering failover from {{ active_ip }} to {{ passive_ip }}"
+
+- name: HA Upgrade | Wait for HA sync before failover
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ active_provider }}"
+    cmd: "show high-availability state"
+  register: pre_failover_state
+  delegate_to: localhost
+  until: "'synchronized' in (pre_failover_state.stdout | default('synchronized')) | lower"
+  retries: "{{ (ha_sync_timeout | int / 15) | int }}"
+  delay: 15
+
+- name: HA Upgrade | Suspend HA on active to trigger failover
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ active_provider }}"
+    cmd: "request high-availability state suspend"
+  register: suspend_response
+  delegate_to: localhost
+
+- name: HA Upgrade | Wait for failover
+  ansible.builtin.pause:
+    seconds: "{{ ha_failover_wait }}"
+    prompt: "Waiting for failover to complete..."
+
+- name: HA Upgrade | Verify failover - check new active
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ passive_provider }}"
+    cmd: "show high-availability state"
+  register: new_active_state
+  delegate_to: localhost
+
+- name: HA Upgrade | Confirm failover success
+  ansible.builtin.assert:
+    that:
+      - "'active' in (new_active_state.stdout | default('active')) | lower"
+    fail_msg: "Failover failed - {{ passive_ip }} is not active"
+    success_msg: "Failover successful - {{ passive_ip }} is now active"
+
+# =============================================================================
+# Step 3: Upgrade Former Active Device
+# =============================================================================
+
+- name: HA Upgrade | Step 3 - Upgrade former active device
+  ansible.builtin.debug:
+    msg: "Upgrading former active device: {{ active_ip }}"
+
+- name: HA Upgrade | Resume HA on former active
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ active_provider }}"
+    cmd: "request high-availability state functional"
+  register: resume_response
+  delegate_to: localhost
+
+- name: HA Upgrade | Wait for former active to become passive
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: HA Upgrade | Install on former active device
+  ansible.builtin.set_fact:
+    install_provider: "{{ active_provider }}"
+
+- name: HA Upgrade | Execute former active installation
+  ansible.builtin.include_tasks: install.yml
+
+# =============================================================================
+# Final Verification
+# =============================================================================
+
+- name: HA Upgrade | Wait for HA pair to synchronize
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ passive_provider }}"
+    cmd: "show high-availability state"
+  register: final_ha_state
+  delegate_to: localhost
+  until: "'synchronized' in (final_ha_state.stdout | default('synchronized')) | lower"
+  retries: "{{ (ha_sync_timeout | int / 15) | int }}"
+  delay: 15
+
+- name: HA Upgrade | Display completion
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "HA Pair Upgrade Complete"
+      - "============================================"
+      - "Both devices upgraded to {{ target_panos_version }}"
+      - "HA State: Synchronized"
+      - "============================================"
+
+- name: HA Upgrade | Set HA upgrade completed
+  ansible.builtin.set_fact:
+    ha_upgrade_completed: true

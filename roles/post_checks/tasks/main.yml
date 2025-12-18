@@ -1,0 +1,59 @@
+---
+# =============================================================================
+# File: roles/post_checks/tasks/main.yml
+# Post-Checks Role - Main Entry Point
+# Uses paloaltonetworks.panos collection via SSH
+# =============================================================================
+
+- name: Post-checks | Load role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/defaults/main.yml"
+
+- name: Post-checks | Wait for device to stabilize
+  ansible.builtin.pause:
+    seconds: "{{ post_upgrade_stabilization_wait }}"
+    prompt: "Waiting for device to stabilize after upgrade..."
+
+- name: Post-checks | Verify version
+  ansible.builtin.include_tasks: verify_version.yml
+
+- name: Post-checks | Verify HA sync
+  ansible.builtin.include_tasks: ha_sync.yml
+  when: upgrade_mode == 'ha_pair'
+
+- name: Post-checks | Verify services health
+  ansible.builtin.include_tasks: services_health.yml
+
+- name: Post-checks | Set overall result
+  ansible.builtin.set_fact:
+    postcheck_all_passed: >-
+      {{
+        postcheck_version_passed and
+        (postcheck_ha_passed | default(true)) and
+        postcheck_services_passed
+      }}
+
+- name: Post-checks | Display summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "Post-Upgrade Check Summary"
+      - "============================================"
+      - "Version Check: {{ 'PASS' if postcheck_version_passed else 'FAIL' }}"
+      - "HA Sync: {{ 'PASS' if postcheck_ha_passed | default(true) else 'FAIL' }}"
+      - "Services: {{ 'PASS' if postcheck_services_passed else 'FAIL' }}"
+      - "============================================"
+      - "Overall: {{ 'PASS' if postcheck_all_passed else 'FAIL' }}"
+      - "============================================"
+
+- name: Post-checks | Handle failure
+  when: not postcheck_all_passed
+  block:
+    - name: Post-checks | Warn on failure
+      ansible.builtin.debug:
+        msg: "WARNING: Post-upgrade checks failed. Review device status."
+
+    - name: Post-checks | Trigger rollback if enabled
+      ansible.builtin.include_role:
+        name: rollback
+      when: auto_rollback_on_failure | default(false)

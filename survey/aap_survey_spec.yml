@@ -1,0 +1,175 @@
+---
+# =============================================================================
+# File: survey/aap_survey_spec.yml
+# AAP Survey Specification - Palo Alto Upgrade
+# =============================================================================
+# Architecture:
+#   - Panorama: Used for device discovery/validation only
+#   - SSH to Firewall: All upgrade operations via paloaltonetworks.panos collection
+#
+# AAP Answer Types:
+#   - text: Single line text input
+#   - textarea: Multi-line text input
+#   - password: Masked text input
+#   - integer: Whole number input
+#   - float: Decimal number input
+#   - multiplechoice: Single select dropdown
+#   - multiselect: Multi select dropdown
+# =============================================================================
+
+spec:
+  # -------------------------------------------------------------------------
+  # Operation Selection
+  # -------------------------------------------------------------------------
+  - question_name: "Operation Mode"
+    question_description: "Select the operation to perform"
+    required: true
+    type: multiplechoice
+    variable: survey_operation
+    default: "full_upgrade"
+    choices: |
+      pre_checks_only
+      backup_only
+      download_only
+      full_upgrade
+      rollback
+
+  # -------------------------------------------------------------------------
+  # Panorama Server (for device validation)
+  # -------------------------------------------------------------------------
+  - question_name: "Panorama Server"
+    question_description: "Panorama hostname or IP (used to verify device is managed)"
+    required: true
+    type: text
+    variable: panorama_server
+    default: ""
+    max: 255
+
+  # -------------------------------------------------------------------------
+  # Target Firewall
+  # -------------------------------------------------------------------------
+  - question_name: "Target Firewall"
+    question_description: "Firewall hostname or IP address to upgrade (SSH connection)"
+    required: true
+    type: text
+    variable: survey_target_firewall
+    default: ""
+    max: 255
+
+  # -------------------------------------------------------------------------
+  # Upgrade Configuration
+  # -------------------------------------------------------------------------
+  - question_name: "Target PAN-OS Version"
+    question_description: "Target version (e.g., 11.1.3 or 10.2.9-h1)"
+    required: true
+    type: text
+    variable: survey_target_version
+    default: ""
+    max: 20
+
+  - question_name: "Upgrade Mode"
+    question_description: "Standalone device or HA pair upgrade"
+    required: true
+    type: multiplechoice
+    variable: survey_upgrade_mode
+    default: "standalone"
+    choices: |
+      standalone
+      ha_pair
+
+  - question_name: "Download Only"
+    question_description: "Only download image, do not install"
+    required: false
+    type: multiplechoice
+    variable: survey_download_only
+    default: "false"
+    choices: |
+      true
+      false
+
+  - question_name: "Force Upgrade"
+    question_description: "Force upgrade even if same version installed"
+    required: false
+    type: multiplechoice
+    variable: survey_force_upgrade
+    default: "false"
+    choices: |
+      true
+      false
+
+  # -------------------------------------------------------------------------
+  # HA Settings
+  # -------------------------------------------------------------------------
+  - question_name: "HA Upgrade Strategy"
+    question_description: "How to upgrade HA pair (only applies to ha_pair mode)"
+    required: false
+    type: multiplechoice
+    variable: survey_ha_strategy
+    default: "sequential"
+    choices: |
+      sequential
+      parallel
+
+  - question_name: "HA Failover Wait (seconds)"
+    question_description: "Time to wait after HA failover"
+    required: false
+    type: integer
+    variable: survey_ha_failover_wait
+    default: 300
+    min: 60
+    max: 900
+
+  - question_name: "HA Sync Timeout (seconds)"
+    question_description: "Maximum time to wait for HA sync"
+    required: false
+    type: integer
+    variable: survey_ha_sync_timeout
+    default: 600
+    min: 300
+    max: 1800
+
+  # -------------------------------------------------------------------------
+  # Backup Settings
+  # -------------------------------------------------------------------------
+  - question_name: "Enable Backup"
+    question_description: "Create config snapshot on device before upgrade"
+    required: false
+    type: multiplechoice
+    variable: survey_backup_enabled
+    default: "true"
+    choices: |
+      true
+      false
+
+  # -------------------------------------------------------------------------
+  # Safety Options
+  # -------------------------------------------------------------------------
+  - question_name: "Skip Pre-checks"
+    question_description: "Skip pre-upgrade health checks (not recommended)"
+    required: false
+    type: multiplechoice
+    variable: survey_skip_prechecks
+    default: "false"
+    choices: |
+      true
+      false
+
+  - question_name: "Auto Rollback on Failure"
+    question_description: "Automatically rollback config if upgrade fails"
+    required: false
+    type: multiplechoice
+    variable: survey_auto_rollback
+    default: "true"
+    choices: |
+      true
+      false
+
+  - question_name: "Validate Certificates"
+    question_description: "Validate SSL certificates for API connections"
+    required: false
+    type: multiplechoice
+    variable: validate_certs
+    default: "true"
+    choices: |
+      true
+      false

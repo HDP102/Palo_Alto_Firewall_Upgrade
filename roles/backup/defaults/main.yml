@@ -1,0 +1,19 @@
+---
+# =============================================================================
+# File: roles/backup/defaults/main.yml
+# Backup Role - Default Variables
+# =============================================================================
+
+# Backup settings
+backup_enabled: true
+
+# Export config to Panorama (in addition to device snapshot)
+export_to_panorama: false
+
+# Backup flags (set during execution)
+backup_completed: false
+config_backup_successful: false
+
+# Backup naming
+# Snapshots are saved on device as: pre-upgrade-<timestamp>.xml
+# Example: pre-upgrade-20241215T143022.xml

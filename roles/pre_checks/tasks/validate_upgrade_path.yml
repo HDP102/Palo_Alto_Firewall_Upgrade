@@ -1,0 +1,141 @@
+---
+# =============================================================================
+# File: roles/pre_checks/tasks/validate_upgrade_path.yml
+# Validate Upgrade Path
+# =============================================================================
+
+- name: Upgrade Path | Load version matrix
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/vars/panos_version_matrix.yml"
+
+- name: Upgrade Path | Extract major.minor versions
+  ansible.builtin.set_fact:
+    current_major_minor: "{{ device_current_version | panos_major_minor }}"
+    target_major_minor: "{{ target_panos_version | panos_major_minor }}"
+
+- name: Upgrade Path | Check if same exact version
+  ansible.builtin.set_fact:
+    is_same_version: "{{ device_current_version == target_panos_version }}"
+
+- name: Upgrade Path | Check if same major.minor (patch/hotfix upgrade)
+  ansible.builtin.set_fact:
+    is_same_major_minor: "{{ current_major_minor == target_major_minor }}"
+
+- name: Upgrade Path | Handle same exact version
+  when: is_same_version
+  block:
+    - name: Upgrade Path | Already at target version
+      ansible.builtin.debug:
+        msg: "Device is already at target version {{ target_panos_version }}"
+
+    - name: Upgrade Path | Set result for same version
+      ansible.builtin.set_fact:
+        precheck_upgrade_path_valid: true
+        upgrade_not_needed: true
+      when: not (force_upgrade | default(false) | bool)
+
+    - name: Upgrade Path | Force upgrade same version
+      ansible.builtin.set_fact:
+        precheck_upgrade_path_valid: true
+        upgrade_not_needed: false
+      when: force_upgrade | default(false) | bool
+
+- name: Upgrade Path | Handle same major.minor upgrade (patch/hotfix)
+  when:
+    - not is_same_version
+    - is_same_major_minor
+  block:
+    - name: Upgrade Path | Same major.minor is always valid
+      ansible.builtin.debug:
+        msg: "Patch/hotfix upgrade within {{ current_major_minor }} - always valid"
+
+    - name: Upgrade Path | Set valid for same major.minor
+      ansible.builtin.set_fact:
+        precheck_upgrade_path_valid: true
+        upgrade_not_needed: false
+
+- name: Upgrade Path | Check cross-version upgrade path
+  when:
+    - not is_same_version
+    - not is_same_major_minor
+  block:
+    - name: Upgrade Path | Check if downgrade
+      ansible.builtin.set_fact:
+        is_downgrade: "{{ device_current_version | panos_version_gt(target_panos_version) }}"
+
+    - name: Upgrade Path | Fail on downgrade attempt
+      ansible.builtin.fail:
+        msg: "Downgrade from {{ device_current_version }} to {{ target_panos_version }} is not supported"
+      when: is_downgrade | default(false)
+
+    - name: Upgrade Path | Get valid targets for current version
+      ansible.builtin.set_fact:
+        valid_direct_targets: "{{ version_matrix[current_major_minor]['direct_upgrade_to'] | default([]) }}"
+        intermediate_required: "{{ version_matrix[current_major_minor]['intermediate_required'] | default({}) }}"
+      when: current_major_minor in version_matrix
+
+    - name: Upgrade Path | Set empty targets if version not in matrix
+      ansible.builtin.set_fact:
+        valid_direct_targets: []
+        intermediate_required: {}
+      when: current_major_minor not in version_matrix
+
+    - name: Upgrade Path | Check if direct upgrade is valid
+      ansible.builtin.set_fact:
+        is_direct_upgrade_valid: "{{ target_major_minor in valid_direct_targets }}"
+
+    - name: Upgrade Path | Check if intermediate versions needed
+      ansible.builtin.set_fact:
+        needs_intermediate: "{{ target_major_minor in intermediate_required }}"
+        intermediate_versions: "{{ intermediate_required[target_major_minor] | default([]) }}"
+      when: not is_direct_upgrade_valid
+
+    - name: Upgrade Path | Fail if intermediate versions required
+      ansible.builtin.fail:
+        msg: >-
+          Cannot upgrade directly from {{ device_current_version }} to {{ target_panos_version }}.
+          Required intermediate versions: {{ intermediate_versions | join(' -> ') }} -> {{ target_major_minor }}
+      when:
+        - not is_direct_upgrade_valid
+        - needs_intermediate | default(false)
+
+    - name: Upgrade Path | Warn if version not in matrix but allow
+      ansible.builtin.debug:
+        msg: "WARNING: Version {{ current_major_minor }} not in matrix. Proceeding with upgrade - verify path manually."
+      when:
+        - not is_direct_upgrade_valid
+        - current_major_minor not in version_matrix
+
+    - name: Upgrade Path | Set valid if not in matrix (allow with warning)
+      ansible.builtin.set_fact:
+        precheck_upgrade_path_valid: true
+        upgrade_not_needed: false
+      when:
+        - not is_direct_upgrade_valid
+        - current_major_minor not in version_matrix
+
+    - name: Upgrade Path | Fail if no valid path and version is in matrix
+      ansible.builtin.fail:
+        msg: >-
+          No valid upgrade path from {{ device_current_version }} to {{ target_panos_version }}.
+          Check the version matrix for supported upgrade paths.
+      when:
+        - not is_direct_upgrade_valid
+        - not needs_intermediate | default(false)
+        - current_major_minor in version_matrix
+
+    - name: Upgrade Path | Set valid path result
+      ansible.builtin.set_fact:
+        precheck_upgrade_path_valid: true
+        upgrade_not_needed: false
+      when: is_direct_upgrade_valid
+
+- name: Upgrade Path | Display upgrade path summary
+  ansible.builtin.debug:
+    msg:
+      - "--- Upgrade Path ---"
+      - "Current Version: {{ device_current_version }}"
+      - "Target Version: {{ target_panos_version }}"
+      - "Same Major.Minor: {{ is_same_major_minor }}"
+      - "Upgrade Needed: {{ 'NO' if upgrade_not_needed | default(false) else 'YES' }}"
+      - "Path Valid: {{ 'YES' if precheck_upgrade_path_valid | default(false) else 'NO' }}"

@@ -1,0 +1,104 @@
+---
+# =============================================================================
+# File: roles/pre_checks/tasks/connectivity.yml
+# Connectivity Checks
+# =============================================================================
+# File: roles/pre_checks/tasks/connectivity.yml
+
+- name: Connectivity | Get device info from Panorama
+  ansible.builtin.uri:
+    url: "https://{{ panorama_host }}/api/"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      type: op
+      cmd: "<show><devices><all></all></devices></show>"
+      key: "{{ panorama_api_key }}"
+    validate_certs: "{{ panorama_validate_certs }}"
+    timeout: "{{ api_timeout }}"
+  register: panorama_devices_response
+  delegate_to: localhost
+
+- name: Connectivity | Parse device list
+  ansible.builtin.set_fact:
+    managed_devices: "{{ panorama_devices_response.json.response.result.devices.entry | default([]) }}"
+
+- name: Connectivity | Find target device
+  ansible.builtin.set_fact:
+    target_device_info: >-
+      {{
+        managed_devices | selectattr('hostname', 'equalto', target_device) | first | default(none)
+      }}
+  when: target_device | length > 0
+
+- name: Connectivity | Find target device by serial
+  ansible.builtin.set_fact:
+    target_device_info: >-
+      {{
+        managed_devices | selectattr('@name', 'equalto', device_serial) | first | default(none)
+      }}
+  when:
+    - target_device_info is not defined or target_device_info is none
+    - device_serial | length > 0
+
+- name: Connectivity | Fail if device not found
+  ansible.builtin.fail:
+    msg: "Device '{{ target_device }}' not found in Panorama managed devices"
+  when: target_device_info is none or target_device_info is not defined
+
+- name: Connectivity | Extract device details
+  ansible.builtin.set_fact:
+    device_serial: "{{ target_device_info['@name'] | default(target_device_info.serial) }}"
+    device_hostname: "{{ target_device_info.hostname }}"
+    device_ip: "{{ target_device_info['ip-address'] | default('') }}"
+    device_model: "{{ target_device_info.model | default('') }}"
+    device_current_version: "{{ target_device_info['sw-version'] | default('') }}"
+    device_connected: "{{ target_device_info.connected | default('no') }}"
+
+- name: Connectivity | Check device is connected
+  ansible.builtin.fail:
+    msg: "Device {{ device_hostname }} is not connected to Panorama"
+  when: device_connected != 'yes'
+
+- name: Connectivity | Test direct API connectivity to device via Panorama
+  ansible.builtin.uri:
+    url: "https://{{ panorama_host }}/api/"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      type: op
+      cmd: "<show><s><info></info></s></show>"
+      key: "{{ panorama_api_key }}"
+      target: "{{ device_serial }}"
+    validate_certs: "{{ panorama_validate_certs }}"
+    timeout: "{{ api_timeout }}"
+  register: device_info_response
+  delegate_to: localhost
+
+- name: Connectivity | Parse system info
+  ansible.builtin.set_fact:
+    device_system_info: "{{ device_info_response.json.response.result.s.info | default({}) }}"
+
+- name: Connectivity | Verify system info retrieved
+  ansible.builtin.assert:
+    that:
+      - device_system_info.hostname is defined
+      - device_system_info['sw-version'] is defined
+    fail_msg: "Failed to retrieve system info from device"
+    success_msg: "Successfully connected to {{ device_system_info.hostname }}"
+
+- name: Connectivity | Set connectivity passed
+  ansible.builtin.set_fact:
+    precheck_connectivity_passed: true
+    device_uptime: "{{ device_system_info.uptime | default('unknown') }}"
+    device_version_from_device: "{{ device_system_info['sw-version'] }}"
+
+- name: Connectivity | Display device info
+  ansible.builtin.debug:
+    msg:
+      - "Device: {{ device_hostname }}"
+      - "Serial: {{ device_serial }}"
+      - "Model: {{ device_model }}"
+      - "Current Version: {{ device_version_from_device }}"
+      - "Uptime: {{ device_uptime }}"
+      - "Connected: YES"

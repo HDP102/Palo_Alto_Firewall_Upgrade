@@ -1,0 +1,24 @@
+---
+# =============================================================================
+# File: roles/rollback/defaults/main.yml
+# Rollback Role - Default Variables
+# =============================================================================
+
+# Rollback type: config, firmware, full
+rollback_type: "config"
+
+# Use device-side snapshot if available
+use_device_snapshot: true
+
+# Rollback flags
+rollback_completed: false
+rollback_success: false
+
+# Specific backup file to restore (optional)
+# rollback_backup_file: ""
+
+# Specific version to rollback to (optional - defaults to pre-upgrade version)
+# rollback_target_version: ""
+
+# Rollback reason (set by calling role)
+rollback_reason: "Manual rollback or upgrade failure"

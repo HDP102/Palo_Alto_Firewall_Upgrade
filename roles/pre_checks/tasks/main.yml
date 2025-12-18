@@ -1,0 +1,54 @@
+---
+# =============================================================================
+# File: roles/pre_checks/tasks/main.yml
+# Pre-Checks Role - Main Entry Point
+# Uses paloaltonetworks.panos collection via SSH to firewall
+# =============================================================================
+
+- name: Pre-checks | Load role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/defaults/main.yml"
+
+- name: Pre-checks | System health validation
+  ansible.builtin.include_tasks: system_health.yml
+
+- name: Pre-checks | HA status validation
+  ansible.builtin.include_tasks: ha_status.yml
+  when: upgrade_mode == 'ha_pair'
+
+- name: Pre-checks | Set default HA passed for standalone
+  ansible.builtin.set_fact:
+    precheck_ha_passed: true
+  when: upgrade_mode != 'ha_pair'
+
+- name: Pre-checks | Validate upgrade path
+  ansible.builtin.include_tasks: validate_upgrade_path.yml
+
+- name: Pre-checks | Set overall result
+  ansible.builtin.set_fact:
+    precheck_all_passed: >-
+      {{
+        (precheck_health_passed | default(false)) and
+        (precheck_ha_passed | default(true)) and
+        (precheck_upgrade_path_valid | default(false))
+      }}
+
+- name: Pre-checks | Summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "Pre-Check Summary for {{ device_hostname }}"
+      - "============================================"
+      - "System Health: {{ 'PASS' if (precheck_health_passed | default(false)) else 'FAIL' }}"
+      - "HA Status: {{ 'PASS' if (precheck_ha_passed | default(true)) else 'FAIL' }}"
+      - "Upgrade Path: {{ 'PASS' if (precheck_upgrade_path_valid | default(false)) else 'FAIL' }}"
+      - "============================================"
+      - "Overall: {{ 'READY FOR UPGRADE' if precheck_all_passed else 'NOT READY' }}"
+      - "============================================"
+
+- name: Pre-checks | Fail if checks not passed
+  ansible.builtin.fail:
+    msg: "Pre-checks failed. Review the summary above. Use skip_pre_checks=true to override (not recommended)."
+  when:
+    - not precheck_all_passed
+    - not (skip_pre_checks | default(false) | bool)

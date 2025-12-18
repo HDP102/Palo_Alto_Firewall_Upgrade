@@ -1,0 +1,180 @@
+---
+# =============================================================================
+# File: roles/upgrade/tasks/install.yml
+# Install PAN-OS software and reboot via SSH
+# Common tasks used by standalone and HA upgrades
+# =============================================================================
+
+- name: Install | Start software installation
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ install_provider }}"
+    cmd: "request system software install version {{ target_panos_version }}"
+  register: install_response
+  delegate_to: localhost
+
+- name: Install | Debug raw install response
+  ansible.builtin.debug:
+    msg: "Raw install response: {{ install_response.stdout | default('NO STDOUT') }}"
+
+# Extract job ID from JSON response
+- name: Install | Extract install job ID
+  ansible.builtin.set_fact:
+    install_job_id: >-
+      {%- set stdout = install_response.stdout | default('') -%}
+      {%- if stdout -%}
+        {%- if stdout is mapping -%}
+          {{ stdout.response.result.job | default('') }}
+        {%- else -%}
+          {%- set parsed = stdout | from_json -%}
+          {{ parsed.response.result.job | default('') }}
+        {%- endif -%}
+      {%- else -%}
+        
+      {%- endif -%}
+  ignore_errors: true
+
+- name: Install | Fail if no job ID captured
+  ansible.builtin.fail:
+    msg: |
+      STOPPING PLAYBOOK - Failed to extract install job ID.
+      Raw response: {{ install_response.stdout | default('NO STDOUT') }}
+  when: install_job_id | default('') | trim | length == 0
+
+- name: Install | Display install started
+  ansible.builtin.debug:
+    msg: "Installation started - Job ID: {{ install_job_id }}. This may take several minutes..."
+
+# Monitor installation - check for status=FIN in JSON response
+- name: Install | Monitor installation progress
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ install_provider }}"
+    cmd: "show jobs id {{ install_job_id }}"
+  register: install_job_status
+  delegate_to: localhost
+  until: >-
+    ('"status": "FIN"' in (install_job_status.stdout | default('') | string)) or
+    ('"status":"FIN"' in (install_job_status.stdout | default('') | string))
+  retries: "{{ (install_timeout | int / poll_interval | int) | int }}"
+  delay: "{{ poll_interval }}"
+  when: install_job_id | trim | length > 0
+
+- name: Install | Display FINAL install job status
+  ansible.builtin.debug:
+    msg:
+      - "========== INSTALL JOB FINAL STATUS =========="
+      - "{{ install_job_status.stdout | default('no output') }}"
+      - "========== END JOB STATUS =========="
+
+# Parse job result from JSON to check success
+- name: Install | Check installation result
+  ansible.builtin.set_fact:
+    install_success: >-
+      {{
+        ('"result": "OK"' in (install_job_status.stdout | default('') | string) and '"status": "FIN"' in (install_job_status.stdout | default('') | string)) or
+        ('"result":"OK"' in (install_job_status.stdout | default('') | string) and '"status":"FIN"' in (install_job_status.stdout | default('') | string))
+      }}
+
+- name: Install | Fail if installation failed
+  ansible.builtin.fail:
+    msg: |
+      STOPPING PLAYBOOK - Software installation failed.
+      Job output: {{ install_job_status.stdout | default('no output') }}
+  when: 
+    - not install_success
+    - install_job_status.stdout is defined
+
+- name: Install | Display installation success
+  ansible.builtin.debug:
+    msg: "Successfully installed PAN-OS {{ target_panos_version }} - Proceeding to reboot"
+
+- name: Install | Reboot device
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ install_provider }}"
+    cmd: "request restart system"
+  register: reboot_response
+  delegate_to: localhost
+
+- name: Install | Wait for device to go offline
+  ansible.builtin.pause:
+    seconds: 60
+    prompt: "Waiting for device to begin reboot..."
+
+- name: Install | Wait for device to come back online
+  ansible.builtin.wait_for:
+    host: "{{ install_provider.ip_address }}"
+    port: 443
+    state: started
+    delay: 30
+    timeout: "{{ reboot_timeout }}"
+  delegate_to: localhost
+
+- name: Install | Additional wait for services to start
+  ansible.builtin.pause:
+    seconds: 90
+    prompt: "Waiting for management services to initialize..."
+
+- name: Install | Verify device is responsive
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ install_provider }}"
+    cmd: "show system info"
+  register: post_reboot_info
+  delegate_to: localhost
+  retries: 10
+  delay: 30
+  until: post_reboot_info is succeeded
+
+- name: Install | Debug post-reboot response
+  ansible.builtin.debug:
+    msg:
+      - "========== POST-REBOOT SYSTEM INFO =========="
+      - "stdout_xml: {{ post_reboot_info.stdout_xml | default('NO XML') }}"
+      - "stdout: {{ post_reboot_info.stdout | default('NO STDOUT') }}"
+      - "========== END SYSTEM INFO =========="
+
+# Extract version - try stdout_xml first (XML format), then stdout (JSON format)
+- name: Install | Set default installed version
+  ansible.builtin.set_fact:
+    installed_version: "unknown"
+
+- name: Install | Extract version from XML response
+  ansible.builtin.set_fact:
+    installed_version: "{{ post_reboot_info.stdout_xml | regex_search('<sw-version>([^<]+)</sw-version>', '\\1') | first }}"
+  when: 
+    - post_reboot_info.stdout_xml is defined
+    - "'<sw-version>' in (post_reboot_info.stdout_xml | default(''))"
+  ignore_errors: true
+
+# Fallback: try JSON parsing if XML didn't work
+- name: Install | Extract version from JSON response (fallback)
+  ansible.builtin.set_fact:
+    installed_version: >-
+      {%- set stdout = post_reboot_info.stdout | default('') -%}
+      {%- if stdout -%}
+        {%- if stdout is mapping -%}
+          {{ stdout.response.result.system['sw-version'] | default('unknown') }}
+        {%- else -%}
+          {%- set parsed = stdout | from_json -%}
+          {{ parsed.response.result.system['sw-version'] | default('unknown') }}
+        {%- endif -%}
+      {%- else -%}
+        unknown
+      {%- endif -%}
+  when: installed_version == 'unknown'
+  ignore_errors: true
+
+- name: Install | Display extracted version
+  ansible.builtin.debug:
+    msg: "Detected installed version: {{ installed_version }}"
+
+- name: Install | Verify version upgrade
+  ansible.builtin.assert:
+    that:
+      - installed_version == target_panos_version
+    fail_msg: "Version mismatch after upgrade. Expected: {{ target_panos_version }}, Got: {{ installed_version }}"
+    success_msg: "Successfully upgraded to {{ installed_version }}"
+  when: installed_version != 'unknown'
+
+- name: Install | Warn if version could not be determined
+  ansible.builtin.debug:
+    msg: "WARNING: Could not determine installed version. Please verify manually."
+  when: installed_version == 'unknown'

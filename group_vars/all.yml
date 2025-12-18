@@ -1,0 +1,91 @@
+---
+# =============================================================================
+# File: group_vars/all.yml
+# Palo Alto Upgrade - Global Variables
+# =============================================================================
+# Survey variables are passed from AAP and override these defaults
+#
+# Architecture:
+#   - Panorama REST API: Device discovery, inventory, HA pair detection
+#   - SSH to Firewall: All upgrade operations (using paloaltonetworks.panos collection)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Panorama Connection (for device discovery only)
+# -----------------------------------------------------------------------------
+panorama_host: "{{ panorama_server | default('') }}"
+panorama_validate_certs: "{{ validate_certs | default(true) }}"
+
+# -----------------------------------------------------------------------------
+# Target Firewall (from survey - hostname or IP)
+# -----------------------------------------------------------------------------
+target_firewall: "{{ survey_target_firewall | default('') }}"
+
+# -----------------------------------------------------------------------------
+# Credentials (same for Panorama and Firewalls - from AAP credential)
+# -----------------------------------------------------------------------------
+# ansible_user and ansible_password are injected by AAP credential type
+
+# -----------------------------------------------------------------------------
+# Provider for paloaltonetworks.panos collection (SSH to firewall)
+# -----------------------------------------------------------------------------
+firewall_provider:
+  ip_address: "{{ target_firewall }}"
+  username: "{{ ansible_user }}"
+  password: "{{ ansible_password }}"
+
+# Provider for Panorama API calls
+panorama_provider:
+  ip_address: "{{ panorama_host }}"
+  username: "{{ ansible_user }}"
+  password: "{{ ansible_password }}"
+
+# -----------------------------------------------------------------------------
+# Upgrade Settings (from survey)
+# -----------------------------------------------------------------------------
+target_panos_version: "{{ survey_target_version | default('') }}"
+upgrade_mode: "{{ survey_upgrade_mode | default('standalone') }}"  # standalone, ha_pair
+download_only: "{{ survey_download_only | default(false) }}"
+force_upgrade: "{{ survey_force_upgrade | default(false) }}"
+
+# -----------------------------------------------------------------------------
+# HA Settings
+# -----------------------------------------------------------------------------
+ha_upgrade_strategy: "{{ survey_ha_strategy | default('sequential') }}"  # sequential, parallel
+ha_failover_wait: "{{ survey_ha_failover_wait | default(300) }}"
+ha_sync_timeout: "{{ survey_ha_sync_timeout | default(600) }}"
+
+# -----------------------------------------------------------------------------
+# Backup Settings
+# -----------------------------------------------------------------------------
+backup_enabled: "{{ survey_backup_enabled | default(true) }}"
+# Backups are saved ON THE DEVICE as: pre-upgrade-<timestamp>.xml
+
+# -----------------------------------------------------------------------------
+# Timeouts and Retries
+# -----------------------------------------------------------------------------
+panos_timeout: 120
+download_timeout: 3600
+install_timeout: 1800
+reboot_timeout: 1800
+commit_timeout: 600
+poll_interval: 30
+
+# -----------------------------------------------------------------------------
+# Pre-check Thresholds
+# -----------------------------------------------------------------------------
+precheck_thresholds:
+  cpu_percent_max: 80
+  memory_percent_max: 80
+  disk_percent_max: 80
+  min_uptime_minutes: 30
+
+# -----------------------------------------------------------------------------
+# Operation Control (from survey)
+# -----------------------------------------------------------------------------
+operation_mode: "{{ survey_operation | default('full_upgrade') }}"
+# Options: pre_checks_only, backup_only, full_upgrade, rollback
+
+skip_pre_checks: "{{ survey_skip_prechecks | default(false) }}"
+skip_backup: "{{ survey_skip_backup | default(false) }}"
+auto_rollback_on_failure: "{{ survey_auto_rollback | default(true) }}"

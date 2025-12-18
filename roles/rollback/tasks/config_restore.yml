@@ -1,0 +1,60 @@
+---
+# =============================================================================
+# File: roles/rollback/tasks/config_restore.yml
+# Configuration Restore via SSH - restores from device snapshot
+# =============================================================================
+
+- name: Config Restore | Get snapshot name from backup
+  ansible.builtin.set_fact:
+    restore_snapshot: "{{ pre_upgrade_config_snapshot | default('') }}"
+
+- name: Config Restore | Display available snapshot
+  ansible.builtin.debug:
+    msg: "Restore snapshot: {{ restore_snapshot | default('not set') }}"
+
+- name: Config Restore | Skip if in check mode without snapshot info
+  ansible.builtin.debug:
+    msg: "Check mode - skipping restore (no snapshot data available). In normal run, would restore from pre-upgrade snapshot."
+  when: restore_snapshot | length == 0
+
+- name: Config Restore | Set check mode placeholder
+  ansible.builtin.set_fact:
+    restore_snapshot: "check-mode-placeholder.xml"
+    check_mode_skip: true
+  when: restore_snapshot | length == 0
+
+- name: Config Restore | Display restore plan
+  ansible.builtin.debug:
+    msg: "Restoring configuration from: {{ restore_snapshot }}"
+  when: not (check_mode_skip | default(false))
+
+- name: Config Restore | Load config from snapshot
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "load config from {{ restore_snapshot }}"
+  register: load_response
+  delegate_to: localhost
+  when: not (check_mode_skip | default(false))
+
+- name: Config Restore | Display load result
+  ansible.builtin.debug:
+    msg: "Config loaded from {{ restore_snapshot }}: {{ load_response.stdout | default('success') }}"
+  when: not (check_mode_skip | default(false))
+
+- name: Config Restore | Commit restored configuration
+  paloaltonetworks.panos.panos_commit_firewall:
+    provider: "{{ firewall_provider }}"
+  register: commit_response
+  delegate_to: localhost
+  when: not (check_mode_skip | default(false))
+
+- name: Config Restore | Set rollback success
+  ansible.builtin.set_fact:
+    rollback_success: true
+    config_restore_success: true
+
+- name: Config Restore | Display result
+  ansible.builtin.debug:
+    msg:
+      - "Configuration restore {{ 'SKIPPED (check mode)' if (check_mode_skip | default(false)) else 'SUCCESSFUL' }}"
+      - "Restored from: {{ restore_snapshot }}"

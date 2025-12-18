@@ -1,0 +1,50 @@
+---
+# =============================================================================
+# File: roles/post_checks/tasks/verify_version.yml
+# Verify Version After Upgrade via SSH
+# =============================================================================
+
+- name: Version Check | Get current system info
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show system info"
+  register: post_upgrade_info
+  delegate_to: localhost
+
+- name: Version Check | Set default values
+  ansible.builtin.set_fact:
+    post_upgrade_version: "unknown"
+    post_upgrade_uptime: "unknown"
+
+- name: Version Check | Extract version info
+  when: post_upgrade_info.stdout_xml is defined
+  block:
+    - name: Version Check | Extract version
+      ansible.builtin.set_fact:
+        post_upgrade_version: "{{ post_upgrade_info.stdout_xml | regex_search('<sw-version>([^<]+)</sw-version>') | regex_search('>([^<]+)<') | regex_search('([0-9][-0-9a-zA-Z.]+)') | default('unknown', true) }}"
+      ignore_errors: true
+
+    - name: Version Check | Extract uptime
+      ansible.builtin.set_fact:
+        post_upgrade_uptime: "{{ post_upgrade_info.stdout_xml | regex_search('<uptime>([^<]+)</uptime>') | regex_search('>([^<]+)<') | default('unknown', true) }}"
+      ignore_errors: true
+
+- name: Version Check | Verify target version
+  ansible.builtin.set_fact:
+    postcheck_version_passed: "{{ post_upgrade_version == target_panos_version }}"
+
+- name: Version Check | Display result
+  ansible.builtin.debug:
+    msg:
+      - "Current Version: {{ post_upgrade_version }}"
+      - "Expected Version: {{ target_panos_version }}"
+      - "Match: {{ 'YES' if postcheck_version_passed else 'NO' }}"
+      - "Uptime: {{ post_upgrade_uptime }}"
+
+- name: Version Check | Fail if version mismatch
+  ansible.builtin.fail:
+    msg: "Version verification failed. Expected {{ target_panos_version }}, got {{ post_upgrade_version }}"
+  when:
+    - not postcheck_version_passed
+    - post_upgrade_version != 'unknown'
+    - not skip_version_validation | default(false)

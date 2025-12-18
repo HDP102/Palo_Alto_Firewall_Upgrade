@@ -1,0 +1,330 @@
+---
+# =============================================================================
+# HA Upgrade Strategies
+# =============================================================================
+# Defines strategies and procedures for upgrading HA pairs
+
+# -----------------------------------------------------------------------------
+# HA Upgrade Strategies
+# -----------------------------------------------------------------------------
+ha_strategies:
+
+  # Sequential upgrade - one device at a time with failover
+  sequential:
+    name: "Sequential Upgrade"
+    description: "Upgrade passive device first, failover, then upgrade former active"
+    risk_level: "low"
+    downtime: "minimal"
+    recommended: true
+
+    steps:
+      - name: "Validate HA sync"
+        action: "verify_ha_sync"
+        required: true
+
+      - name: "Identify passive device"
+        action: "identify_passive"
+        required: true
+
+      - name: "Suspend passive device"
+        action: "suspend_ha"
+        target: "passive"
+        required: false
+
+      - name: "Upgrade passive device"
+        action: "upgrade"
+        target: "passive"
+        required: true
+
+      - name: "Reboot passive device"
+        action: "reboot"
+        target: "passive"
+        required: true
+
+      - name: "Wait for passive to rejoin"
+        action: "wait_ha_sync"
+        target: "passive"
+        required: true
+
+      - name: "Verify passive upgrade"
+        action: "verify_version"
+        target: "passive"
+        required: true
+
+      - name: "Failover to upgraded device"
+        action: "trigger_failover"
+        required: true
+
+      - name: "Wait for failover completion"
+        action: "wait_failover"
+        required: true
+
+      - name: "Upgrade former active device"
+        action: "upgrade"
+        target: "former_active"
+        required: true
+
+      - name: "Reboot former active device"
+        action: "reboot"
+        target: "former_active"
+        required: true
+
+      - name: "Wait for HA sync"
+        action: "wait_ha_sync"
+        required: true
+
+      - name: "Verify both devices"
+        action: "verify_ha_pair"
+        required: true
+
+  # Parallel upgrade - both devices simultaneously (higher risk)
+  parallel:
+    name: "Parallel Upgrade"
+    description: "Upgrade both devices simultaneously - causes outage"
+    risk_level: "high"
+    downtime: "significant"
+    recommended: false
+
+    steps:
+      - name: "Validate HA sync"
+        action: "verify_ha_sync"
+        required: true
+
+      - name: "Download image to both"
+        action: "download"
+        target: "both"
+        required: true
+
+      - name: "Install on both devices"
+        action: "install"
+        target: "both"
+        required: true
+
+      - name: "Reboot both devices"
+        action: "reboot"
+        target: "both"
+        required: true
+
+      - name: "Wait for both to come online"
+        action: "wait_online"
+        target: "both"
+        required: true
+
+      - name: "Wait for HA sync"
+        action: "wait_ha_sync"
+        required: true
+
+      - name: "Verify HA pair"
+        action: "verify_ha_pair"
+        required: true
+
+# -----------------------------------------------------------------------------
+# HA State Definitions
+# -----------------------------------------------------------------------------
+ha_states:
+
+  active:
+    aliases:
+      - "active"
+      - "active-primary"
+      - "primary"
+    is_active: true
+    is_passive: false
+
+  passive:
+    aliases:
+      - "passive"
+      - "active-secondary"
+      - "secondary"
+    is_active: false
+    is_passive: true
+
+  initial:
+    aliases:
+      - "initial"
+      - "initializing"
+    is_active: false
+    is_passive: false
+    is_transitional: true
+
+  suspended:
+    aliases:
+      - "suspended"
+      - "suspend"
+    is_active: false
+    is_passive: false
+    is_suspended: true
+
+  non_functional:
+    aliases:
+      - "non-functional"
+      - "non-func"
+      - "error"
+    is_active: false
+    is_passive: false
+    is_error: true
+
+  standalone:
+    aliases:
+      - "standalone"
+      - "disabled"
+      - ""
+    is_standalone: true
+
+# -----------------------------------------------------------------------------
+# HA Sync States
+# -----------------------------------------------------------------------------
+ha_sync_states:
+
+  synchronized:
+    values:
+      - "synchronized"
+      - "synced"
+      - "running-config: synchronized"
+    is_synced: true
+
+  pending:
+    values:
+      - "pending"
+      - "synchronizing"
+      - "in-progress"
+    is_synced: false
+    is_transitional: true
+
+  out_of_sync:
+    values:
+      - "out of sync"
+      - "not synchronized"
+    is_synced: false
+    requires_action: true
+
+# -----------------------------------------------------------------------------
+# Failover Configuration
+# -----------------------------------------------------------------------------
+failover_config:
+
+  # Pre-failover checks
+  pre_failover_checks:
+    - check: "passive_device_healthy"
+      required: true
+      description: "Verify passive device is functional"
+
+    - check: "ha_sync_complete"
+      required: true
+      description: "Verify configuration is synchronized"
+
+    - check: "passive_version_correct"
+      required: true
+      description: "Verify passive has target version"
+
+  # Failover methods
+  methods:
+    suspend_active:
+      description: "Suspend HA on active device"
+      command: "request high-availability state suspend"
+      graceful: true
+
+    reboot_active:
+      description: "Reboot active device to force failover"
+      command: "request restart system"
+      graceful: false
+
+  # Post-failover validation
+  post_failover_checks:
+    - check: "new_active_operational"
+      required: true
+      timeout: 120
+
+    - check: "traffic_flowing"
+      required: false
+      timeout: 60
+
+    - check: "sessions_maintained"
+      required: false
+      timeout: 30
+
+# -----------------------------------------------------------------------------
+# Timeouts and Thresholds
+# -----------------------------------------------------------------------------
+ha_timeouts:
+
+  # Sync timeouts
+  sync_timeout: 600
+  sync_poll_interval: 15
+
+  # Failover timeouts
+  failover_timeout: 300
+  failover_poll_interval: 10
+
+  # State transition timeouts
+  state_transition_timeout: 180
+  state_poll_interval: 10
+
+  # Post-reboot HA formation
+  ha_formation_timeout: 600
+  ha_formation_poll_interval: 30
+
+# -----------------------------------------------------------------------------
+# Rollback Procedures
+# -----------------------------------------------------------------------------
+ha_rollback:
+
+  sequential:
+    description: "Rollback HA pair sequentially"
+    steps:
+      - "Identify which devices were upgraded"
+      - "Suspend upgraded passive device"
+      - "Rollback passive device"
+      - "Wait for passive to rejoin HA"
+      - "Failover if needed"
+      - "Rollback second device if needed"
+      - "Verify HA sync"
+
+  triggers:
+    - condition: "upgrade_failed"
+      action: "immediate_rollback"
+
+    - condition: "post_check_failed"
+      action: "rollback_with_confirmation"
+
+    - condition: "ha_sync_failed"
+      action: "investigate_then_rollback"
+
+# -----------------------------------------------------------------------------
+# Health Check Requirements
+# -----------------------------------------------------------------------------
+ha_health_requirements:
+
+  pre_upgrade:
+    - name: "HA state valid"
+      check: "ha_state_active_or_passive"
+      required: true
+
+    - name: "Peer reachable"
+      check: "peer_connected"
+      required: true
+
+    - name: "Config synchronized"
+      check: "config_synced"
+      required: true
+
+    - name: "No pending commits"
+      check: "no_pending_changes"
+      required: false
+
+  post_upgrade:
+    - name: "Both devices online"
+      check: "both_devices_up"
+      required: true
+
+    - name: "HA formed"
+      check: "ha_state_valid"
+      required: true
+
+    - name: "Config synchronized"
+      check: "config_synced"
+      required: true
+
+    - name: "Versions match"
+      check: "versions_identical"
+      required: true

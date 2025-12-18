@@ -1,0 +1,76 @@
+---
+# =============================================================================
+# File: roles/backup/tasks/config_backup.yml
+# Configuration Backup - Saves named snapshot ON THE DEVICE
+# =============================================================================
+
+- name: Config Backup | Save running config as named snapshot on device
+  ansible.builtin.uri:
+    url: "https://{{ panorama_host }}/api/"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      type: op
+      cmd: "<save><config><to>{{ backup_name }}.xml</to></config></save>"
+      key: "{{ panorama_api_key }}"
+      target: "{{ device_serial }}"
+    validate_certs: "{{ panorama_validate_certs }}"
+    timeout: "{{ api_timeout }}"
+  register: save_config_response
+  delegate_to: localhost
+
+- name: Config Backup | Verify save was successful
+  ansible.builtin.assert:
+    that:
+      - save_config_response.status == 200
+      - "'success' in (save_config_response.content | lower) or save_config_response.json.response['@status'] == 'success'"
+    fail_msg: "Failed to save configuration snapshot on device"
+    success_msg: "Configuration snapshot saved as {{ backup_name }}.xml on device"
+
+- name: Config Backup | List saved configs to verify
+  ansible.builtin.uri:
+    url: "https://{{ panorama_host }}/api/"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      type: op
+      cmd: "<show><config><saved></saved></config></show>"
+      key: "{{ panorama_api_key }}"
+      target: "{{ device_serial }}"
+    validate_certs: "{{ panorama_validate_certs }}"
+    timeout: "{{ api_timeout }}"
+  register: saved_configs_response
+  delegate_to: localhost
+
+- name: Config Backup | Confirm backup exists on device
+  ansible.builtin.assert:
+    that:
+      - "backup_name in (saved_configs_response.content | string)"
+    fail_msg: "Backup {{ backup_name }}.xml not found in device saved configs"
+    success_msg: "Verified {{ backup_name }}.xml exists on device"
+
+- name: Config Backup | Display saved configurations
+  ansible.builtin.debug:
+    msg: "Config snapshot {{ backup_name }}.xml saved on {{ device_hostname }}"
+
+- name: Config Backup | Export config to Panorama (optional)
+  ansible.builtin.uri:
+    url: "https://{{ panorama_host }}/api/"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      type: op
+      cmd: "<show><config><running></running></config></show>"
+      key: "{{ panorama_api_key }}"
+      target: "{{ device_serial }}"
+    validate_certs: "{{ panorama_validate_certs }}"
+    timeout: 300
+  register: running_config_export
+  delegate_to: localhost
+  when: export_to_panorama | default(false)
+  ignore_errors: true
+
+- name: Config Backup | Store config in memory for potential rollback
+  ansible.builtin.set_fact:
+    pre_upgrade_config_snapshot: "{{ backup_name }}.xml"
+    config_backup_successful: true

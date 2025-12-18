@@ -1,0 +1,72 @@
+---
+# =============================================================================
+# File: roles/backup/tasks/device_state.yml
+# Device State Capture - Stores state info in memory for post-upgrade validation
+# =============================================================================
+
+- name: State Capture | Set default session count first
+  ansible.builtin.set_fact:
+    pre_upgrade_session_count: "0"
+
+- name: State Capture | Get session count
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show session info"
+  register: session_response
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: State Capture | Parse session count
+  when: 
+    - session_response is succeeded
+    - session_response.stdout is defined
+    - session_response.stdout | length > 0
+  block:
+    - name: State Capture | Extract session count
+      ansible.builtin.set_fact:
+        pre_upgrade_session_count: "{{ session_response.stdout | regex_search('num-active[^0-9]*([0-9]+)') | regex_search('([0-9]+)') | default('0', true) }}"
+      ignore_errors: true
+
+- name: State Capture | Get HA state if applicable
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show high-availability state"
+  register: ha_state_response
+  delegate_to: localhost
+  ignore_errors: true
+  when: upgrade_mode == 'ha_pair'
+
+- name: State Capture | Get interface status
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show interface all"
+  register: interface_response
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: State Capture | Get routing summary
+  paloaltonetworks.panos.panos_op:
+    provider: "{{ firewall_provider }}"
+    cmd: "show routing summary"
+  register: routing_response
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: State Capture | Store pre-upgrade state
+  ansible.builtin.set_fact:
+    pre_upgrade_state:
+      timestamp: "{{ backup_timestamp }}"
+      hostname: "{{ device_hostname }}"
+      serial: "{{ device_serial }}"
+      version: "{{ device_current_version }}"
+      config_snapshot: "{{ backup_name }}.xml"
+      session_count: "{{ pre_upgrade_session_count | default('0') }}"
+
+- name: State Capture | Display captured state
+  ansible.builtin.debug:
+    msg:
+      - "--- Pre-Upgrade State Captured ---"
+      - "Hostname: {{ device_hostname }}"
+      - "Version: {{ device_current_version }}"
+      - "Config Snapshot: {{ backup_name }}.xml"
+      - "Session Count: {{ pre_upgrade_state.session_count }}"
