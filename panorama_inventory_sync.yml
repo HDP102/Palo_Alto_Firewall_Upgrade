@@ -1,0 +1,381 @@
+---
+# ============================================================================
+# PANORAMA DEVICE SYNC TO AAP INVENTORY
+# ============================================================================
+# Purpose: Query Panorama for managed devices and sync to AAP via hosts.yml
+# Flow: 
+#   1. Query Panorama API for all managed devices
+#   2. Generate hosts.yml in Ansible inventory format
+#   3. Push hosts.yml to Bitbucket
+#   4. AAP inventory source syncs from hosts.yml
+# Schedule: As needed or on regular interval
+# ============================================================================
+
+- name: "Play 1 - Query Panorama and Generate Inventory"
+  hosts: localhost
+  gather_facts: no
+  connection: local
+  
+  vars:
+    # Panorama connection - uses Machine Credential from AAP
+    panorama_host: "walsecpanorama01.rocketsoftware.com"
+    panorama_user: "{{ ansible_user }}"
+    panorama_password: "{{ ansible_password }}"
+    validate_certs: false
+    
+    # Output settings
+    inventory_dir: "/tmp/panorama_inventory"
+    hosts_file: "/tmp/panorama_inventory/hosts.yml"
+    
+    # Bitbucket settings
+    publish_to_bitbucket: true
+    bitbucket_repo_url: "ssh://git@git.rocketsoftware.com:7999/irna/panorama_managed_inventory.git"
+    bitbucket_branch: "master"
+
+  tasks:
+    # ========================================================================
+    # Step 1: Get API Key from Panorama
+    # ========================================================================
+    - name: "Get API key from Panorama"
+      ansible.builtin.uri:
+        url: "https://{{ panorama_host }}/api/?type=keygen&user={{ panorama_user }}&password={{ panorama_password }}"
+        method: GET
+        validate_certs: "{{ validate_certs }}"
+        return_content: true
+      register: api_key_response
+      no_log: true
+
+    - name: "Extract API key from response"
+      ansible.builtin.set_fact:
+        api_key: "{{ api_key_response.content | regex_search('<key>(.*?)</key>', '\\1') | first }}"
+      no_log: true
+
+    # ========================================================================
+    # Step 2: Query Panorama for All Managed Devices
+    # ========================================================================
+    - name: "Get all managed devices from Panorama"
+      ansible.builtin.uri:
+        url: "https://{{ panorama_host }}/api/?type=op&cmd=<show><devices><all></all></devices></show>&key={{ api_key }}"
+        method: GET
+        validate_certs: "{{ validate_certs }}"
+        return_content: true
+      register: all_devices_response
+
+    - name: "Get connected devices from Panorama"
+      ansible.builtin.uri:
+        url: "https://{{ panorama_host }}/api/?type=op&cmd=<show><devices><connected></connected></devices></show>&key={{ api_key }}"
+        method: GET
+        validate_certs: "{{ validate_certs }}"
+        return_content: true
+      register: connected_devices_response
+
+    # ========================================================================
+    # Step 3: Parse Device Information
+    # ========================================================================
+    - name: "Extract device serial numbers"
+      ansible.builtin.set_fact:
+        device_entries: "{{ all_devices_response.content | regex_findall('<entry name=\"([^\"]+)\"') }}"
+
+    - name: "Extract connected device serials"
+      ansible.builtin.set_fact:
+        connected_serials: "{{ connected_devices_response.content | regex_findall('<entry name=\"([^\"]+)\"') }}"
+
+    - name: "Display discovery summary"
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "Panorama Device Discovery"
+          - "========================================="
+          - "Total devices found: {{ device_entries | length }}"
+          - "Connected devices: {{ connected_serials | length }}"
+          - "========================================="
+
+    - name: "Initialize devices list"
+      ansible.builtin.set_fact:
+        devices: []
+
+    - name: "Parse device details from XML"
+      ansible.builtin.set_fact:
+        devices: "{{ devices + [device_info] }}"
+      vars:
+        device_info:
+          serial: "{{ item }}"
+          hostname: "{{ all_devices_response.content | regex_search('<entry name=\"' + item + '\"[^>]*>.*?<hostname>([^<]*)</hostname>', '\\1', multiline=True) | default('unknown', true) | first | default('unknown') }}"
+          ip_address: "{{ all_devices_response.content | regex_search('<entry name=\"' + item + '\"[^>]*>.*?<ip-address>([^<]*)</ip-address>', '\\1', multiline=True) | default('', true) | first | default('') }}"
+          model: "{{ all_devices_response.content | regex_search('<entry name=\"' + item + '\"[^>]*>.*?<model>([^<]*)</model>', '\\1', multiline=True) | default('unknown', true) | first | default('unknown') }}"
+          sw_version: "{{ all_devices_response.content | regex_search('<entry name=\"' + item + '\"[^>]*>.*?<sw-version>([^<]*)</sw-version>', '\\1', multiline=True) | default('unknown', true) | first | default('unknown') }}"
+          device_group: "{{ all_devices_response.content | regex_search('<entry name=\"' + item + '\"[^>]*>.*?<device-group>([^<]*)</device-group>', '\\1', multiline=True) | default('ungrouped', true) | first | default('ungrouped') }}"
+          ha_state: "{{ all_devices_response.content | regex_search('<entry name=\"' + item + '\"[^>]*>.*?<ha>.*?<state>([^<]*)</state>', '\\1', multiline=True) | default('standalone', true) | first | default('standalone') }}"
+          connected: "{{ item in connected_serials }}"
+      loop: "{{ device_entries }}"
+      when: device_entries | length > 0
+
+    # ========================================================================
+    # Step 4: Build Inventory Structure
+    # ========================================================================
+    - name: "Build inventory groups"
+      ansible.builtin.set_fact:
+        inventory_data:
+          all:
+            children:
+              panorama_firewalls:
+                children:
+                  connected: {}
+                  disconnected: {}
+                  ha_active: {}
+                  ha_passive: {}
+                  standalone: {}
+
+    - name: "Create inventory directory"
+      ansible.builtin.file:
+        path: "{{ inventory_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: "Generate hosts.yml content"
+      ansible.builtin.set_fact:
+        hosts_yml_content: |
+          ---
+          # ============================================================================
+          # PANORAMA MANAGED FIREWALLS INVENTORY
+          # Auto-generated by Panorama Device Sync Playbook
+          # Generated: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+          # Total Devices: {{ devices | length }}
+          # Connected: {{ devices | selectattr('connected', 'equalto', true) | list | length }}
+          # Disconnected: {{ devices | selectattr('connected', 'equalto', false) | list | length }}
+          # ============================================================================
+          
+          all:
+            children:
+              panorama_firewalls:
+                children:
+                  connected:
+                    hosts:
+          {% for device in devices if device.connected and device.ip_address %}
+                      {{ device.hostname | default(device.serial) }}:
+                        ansible_host: {{ device.ip_address }}
+                        serial_number: "{{ device.serial }}"
+                        model: "{{ device.model }}"
+                        sw_version: "{{ device.sw_version }}"
+                        device_group: "{{ device.device_group }}"
+                        ha_state: "{{ device.ha_state }}"
+                        connection_status: connected
+          {% endfor %}
+                  
+                  disconnected:
+                    hosts:
+          {% for device in devices if not device.connected and device.ip_address %}
+                      {{ device.hostname | default(device.serial) }}:
+                        ansible_host: {{ device.ip_address }}
+                        serial_number: "{{ device.serial }}"
+                        model: "{{ device.model }}"
+                        sw_version: "{{ device.sw_version }}"
+                        device_group: "{{ device.device_group }}"
+                        ha_state: "{{ device.ha_state }}"
+                        connection_status: disconnected
+          {% endfor %}
+                  
+                  ha_active:
+                    hosts:
+          {% for device in devices if 'active' in device.ha_state | lower and device.ip_address %}
+                      {{ device.hostname | default(device.serial) }}: {}
+          {% endfor %}
+                  
+                  ha_passive:
+                    hosts:
+          {% for device in devices if 'passive' in device.ha_state | lower and device.ip_address %}
+                      {{ device.hostname | default(device.serial) }}: {}
+          {% endfor %}
+                  
+                  standalone:
+                    hosts:
+          {% for device in devices if device.ha_state | lower in ['standalone', 'non-functional', ''] and device.ip_address %}
+                      {{ device.hostname | default(device.serial) }}: {}
+          {% endfor %}
+          
+          {% set device_groups = devices | map(attribute='device_group') | unique | reject('equalto', 'ungrouped') | list %}
+          {% for dg in device_groups %}
+              dg_{{ dg | replace('-', '_') | replace(' ', '_') | lower }}:
+                hosts:
+          {% for device in devices if device.device_group == dg and device.ip_address %}
+                  {{ device.hostname | default(device.serial) }}: {}
+          {% endfor %}
+          
+          {% endfor %}
+          {% set models = devices | map(attribute='model') | unique | reject('equalto', 'unknown') | list %}
+          {% for model in models %}
+              model_{{ model | replace('-', '_') | lower }}:
+                hosts:
+          {% for device in devices if device.model == model and device.ip_address %}
+                  {{ device.hostname | default(device.serial) }}: {}
+          {% endfor %}
+          
+          {% endfor %}
+
+    - name: "Write hosts.yml file"
+      ansible.builtin.copy:
+        content: "{{ hosts_yml_content }}"
+        dest: "{{ hosts_file }}"
+        mode: '0644'
+
+    - name: "Verify hosts.yml was created"
+      ansible.builtin.stat:
+        path: "{{ hosts_file }}"
+      register: hosts_file_check
+
+    - name: "Display generation summary"
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "Inventory Generation Complete!"
+          - "========================================="
+          - "File: {{ hosts_file }}"
+          - "Size: {{ hosts_file_check.stat.size }} bytes"
+          - "Total Devices: {{ devices | length }}"
+          - "Connected: {{ devices | selectattr('connected', 'equalto', true) | list | length }}"
+          - "Disconnected: {{ devices | selectattr('connected', 'equalto', false) | list | length }}"
+          - "========================================="
+
+
+# ============================================================================
+# Play 2 - Push hosts.yml to Bitbucket
+# ============================================================================
+
+- name: "Play 2 - Push Inventory to Bitbucket"
+  hosts: localhost
+  gather_facts: no
+  vars:
+    publish_to_bitbucket: true
+    bitbucket_repo_url: "ssh://git@git.rocketsoftware.com:7999/irna/panorama_managed_inventory.git"
+    bitbucket_branch: "master"
+    hosts_file: "/tmp/panorama_inventory/hosts.yml"
+
+  tasks:
+    - name: "Verify hosts.yml exists before push"
+      ansible.builtin.stat:
+        path: "{{ hosts_file }}"
+      register: hosts_check
+
+    - name: "Fail if hosts.yml doesn't exist"
+      ansible.builtin.fail:
+        msg: "hosts.yml doesn't exist at {{ hosts_file }}"
+      when: not hosts_check.stat.exists
+
+    - name: "Push hosts.yml to Bitbucket"
+      when:
+        - publish_to_bitbucket | bool
+        - hosts_check.stat.exists
+      block:
+        # Step 1: Create temp directory
+        - name: "Create temporary directory for Git operations"
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: "panorama_inventory_git_"
+          register: git_temp_dir
+
+        - name: "Set Git working directory"
+          ansible.builtin.set_fact:
+            git_work_dir: "{{ git_temp_dir.path }}"
+
+        # Step 2: Clone repository using SSH key from credential
+        - name: "Clone repository"
+          ansible.builtin.git:
+            repo: "{{ bitbucket_repo_url }}"
+            dest: "{{ git_work_dir }}"
+            version: "{{ bitbucket_branch }}"
+            accept_hostkey: yes
+            force: yes
+          environment:
+            GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          register: git_clone_result
+
+        # Step 3: Create inventory directory in cloned repo
+        - name: "Create inventory directory in Git repo"
+          ansible.builtin.file:
+            path: "{{ git_work_dir }}/inventory"
+            state: directory
+            mode: '0755'
+
+        # Step 4: Copy hosts.yml to cloned repo
+        - name: "Copy hosts.yml to Git repo"
+          ansible.builtin.copy:
+            src: "{{ hosts_file }}"
+            dest: "{{ git_work_dir }}/inventory/hosts.yml"
+            mode: '0644'
+
+        # Step 5: Configure Git
+        - name: "Configure Git user"
+          ansible.builtin.shell: |
+            cd {{ git_work_dir }}
+            git config user.name "Ansible Automation Platform"
+            git config user.email "aap-automation@rocketsoftware.com"
+          changed_when: false
+
+        # Step 6: Check for changes
+        - name: "Check if there are changes to commit"
+          ansible.builtin.shell: |
+            cd {{ git_work_dir }}
+            git status --porcelain
+          register: git_status
+          changed_when: false
+
+        # Step 7: Add and commit (only if changes exist)
+        - name: "Add hosts.yml to Git"
+          ansible.builtin.shell: |
+            cd {{ git_work_dir }}
+            git add inventory/hosts.yml
+          changed_when: true
+          when: git_status.stdout | length > 0
+
+        - name: "Commit hosts.yml"
+          ansible.builtin.shell: |
+            cd {{ git_work_dir }}
+            git commit -m "Update Panorama inventory - {{ lookup('pipe', 'date +%Y-%m-%d_%H:%M:%S') }} - {{ devices | length }} devices"
+          register: git_commit
+          changed_when: true
+          when: git_status.stdout | length > 0
+
+        - name: "No changes to commit"
+          ansible.builtin.debug:
+            msg: "No changes detected in hosts.yml - skipping commit"
+          when: git_status.stdout | length == 0
+
+        # Step 8: Push to Bitbucket
+        - name: "Push to Bitbucket"
+          ansible.builtin.shell: |
+            cd {{ git_work_dir }}
+            git push origin {{ bitbucket_branch }}
+          environment:
+            GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          register: git_push
+          when: git_status.stdout | length > 0
+
+        # Step 9: Success message
+        - name: "Display success"
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Inventory pushed to Bitbucket!"
+              - "=========================================="
+              - "Repository: {{ bitbucket_repo_url }}"
+              - "Branch: {{ bitbucket_branch }}"
+              - "File: inventory/hosts.yml"
+              - "Devices in inventory: {{ devices | length }}"
+              - "=========================================="
+              - ""
+              - "Next: Sync your AAP inventory source to pull the updated hosts.yml"
+          when: git_status.stdout | length > 0
+
+      always:
+        # Step 10: Cleanup
+        - name: "Cleanup temp directory"
+          ansible.builtin.file:
+            path: "{{ git_work_dir }}"
+            state: absent
+          ignore_errors: yes
+          when: git_temp_dir is defined
+
+
+# ============================================================================
+# END OF PLAYBOOK
+# ============================================================================
